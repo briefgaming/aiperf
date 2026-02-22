@@ -478,6 +478,96 @@ class TestGPUTelemetryConfig:
 
 
 # =============================================================================
+# OTel Streaming Configuration Tests
+# =============================================================================
+
+
+class TestOTelStreamingConfig:
+    """Tests for OTel streaming configuration parsing and validation."""
+
+    def test_disabled_by_default(self):
+        """OTel streaming is disabled when no collector URL is provided."""
+        config = make_config()
+        assert config.otel_streaming_enabled is False
+        assert config.otel_metrics_url is None
+        assert config.otel_stream_metrics_enabled is True
+        assert config.otel_stream_timing_enabled is True
+
+    @pytest.mark.parametrize(
+        "otel_url,expected_url",
+        [
+            ("collector:4318", "http://collector:4318/v1/metrics"),
+            ("http://collector:4318", "http://collector:4318/v1/metrics"),
+            (
+                "http://collector:4318/v1/metrics",
+                "http://collector:4318/v1/metrics",
+            ),
+            ("https://collector:4318/otlp", "https://collector:4318/otlp/v1/metrics"),
+        ],
+    )
+    def test_url_normalization(self, otel_url: str, expected_url: str):
+        """Collector URL is normalized to an OTLP metrics endpoint."""
+        config = make_config(otel_url=otel_url)
+        assert config.otel_streaming_enabled is True
+        assert config.otel_metrics_url == expected_url
+
+    @pytest.mark.parametrize("invalid_otel_url", ["", "   "])
+    def test_invalid_empty_url(self, invalid_otel_url: str):
+        """Empty collector URL is rejected."""
+        with pytest.raises(ValueError, match="--otel-url cannot be empty"):
+            make_config(otel_url=invalid_otel_url)
+
+    @pytest.mark.parametrize(
+        "stream_value,metrics_enabled,timing_enabled",
+        [
+            ("metrics", True, False),
+            ("timing", False, True),
+            ("default", True, True),
+            (["metrics", "timing"], True, True),
+            (["metrics", "timing", "default"], True, True),
+        ],
+    )
+    def test_otel_stream_selection(
+        self,
+        stream_value: str | list[str],
+        metrics_enabled: bool,
+        timing_enabled: bool,
+    ):
+        """OTel stream selection parses into metrics/timing flags."""
+        config = make_config(
+            otel_url="collector:4318",
+            stream=stream_value,
+        )
+        assert config.otel_stream_metrics_enabled is metrics_enabled
+        assert config.otel_stream_timing_enabled is timing_enabled
+
+    @pytest.mark.parametrize(
+        "stream_value,error_pattern",
+        [
+            ("unknown", "Invalid --stream value"),
+            ("both", "Valid options are: metrics, timing, default"),
+            ("none", "Valid options are: metrics, timing, default"),
+            (["metrics", "bad"], "Invalid --stream value"),
+        ],
+    )
+    def test_otel_stream_invalid_values(
+        self, stream_value: str | list[str], error_pattern: str
+    ):
+        """Invalid OTel stream selections are rejected."""
+        with pytest.raises(ValueError, match=error_pattern):
+            make_config(
+                otel_url="collector:4318",
+                stream=stream_value,
+            )
+
+    def test_otel_stream_defaults_to_both_when_unset_with_otel_url(self):
+        """Omitting --stream keeps both domains enabled."""
+        config = make_config(otel_url="collector:4318")
+        assert config.otel_stream_metrics_enabled is True
+        assert config.otel_stream_timing_enabled is True
+
+
+# =============================================================================
 # Load Generator Validation Tests
 # =============================================================================
 

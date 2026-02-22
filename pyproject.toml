@@ -36,6 +36,8 @@ dependencies = [
   "numpy>=1.26.4,<3",
   "nvidia-ml-py",  # Note: No version specified to be most compatible with CUDA version
   "orjson~=3.10.18",
+  "opentelemetry-exporter-otlp-proto-http>=1.24.0,<2.0.0",
+  "opentelemetry-sdk>=1.24.0,<2.0.0",
   "pandas~=2.3.3",
   "pillow~=11.1.0",
   "plotly~=6.4.0",
@@ -85,7 +87,7 @@ dev = [
 # Base settings for ruff
 line-length = 88
 indent-width = 4
-exclude = ["__pycache__", "build", "dist", ".venv", "venv"]
+exclude = ["__pycache__", "build", "dist", ".venv", "venv", "notebooks/TCO_calculator.ipynb"]
 
 [tool.ruff.lint]
 select = [

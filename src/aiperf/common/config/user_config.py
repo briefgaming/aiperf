@@ -10,6 +10,7 @@ from pydantic import BeforeValidator, Field, model_validator
 from typing_extensions import Self
 
 from aiperf.common.aiperf_logger import AIPerfLogger
+from aiperf.common.config.accuracy_config import AccuracyConfig
 from aiperf.common.config.base_config import BaseConfig
 from aiperf.common.config.cli_parameter import CLIParameter, DisableCLI
 from aiperf.common.config.config_defaults import (
@@ -51,6 +52,34 @@ def _is_localhost_url(url: str) -> bool:
     parsed = urlparse(url)
     hostname = parsed.hostname or ""
     return hostname.lower() in ("localhost", "127.0.0.1", "::1")
+
+
+def _normalize_otel_metrics_url(url: str) -> str:
+    """Normalize OTel collector URL to an OTLP metrics endpoint."""
+    from urllib.parse import urlparse, urlunparse
+
+    normalized_url = url.strip()
+    if not normalized_url:
+        raise ValueError("--otel-url cannot be empty.")
+
+    if not normalized_url.startswith(("http://", "https://")):
+        normalized_url = f"http://{normalized_url}"
+
+    parsed = urlparse(normalized_url)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(
+            f"Invalid --otel-url value: {url!r}. Expected host[:port] or a full URL."
+        )
+
+    path = parsed.path.rstrip("/")
+    if path.endswith("/v1/metrics"):
+        normalized_path = path
+    elif not path:
+        normalized_path = "/v1/metrics"
+    else:
+        normalized_path = f"{path}/v1/metrics"
+
+    return urlunparse(parsed._replace(path=normalized_path))
 
 
 def _should_quote_arg(x: Any) -> bool:
@@ -413,6 +442,13 @@ class UserConfig(BaseConfig):
         ),
     ] = LoadGeneratorConfig()
 
+    accuracy: Annotated[
+        AccuracyConfig,
+        Field(
+            description="Accuracy benchmarking configuration",
+        ),
+    ] = AccuracyConfig()
+
     cli_command: Annotated[
         str | None,
         Field(
@@ -463,12 +499,56 @@ class UserConfig(BaseConfig):
         ),
     ] = False
 
+    otel_url: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description=(
+                "Enable real-time metric streaming to an OpenTelemetry collector via OTLP. "
+                "Accepts one collector URL. "
+                "Each entry can be a collector base URL or full OTLP metrics endpoint. "
+                "If no path is specified, '/v1/metrics' is appended automatically. "
+                "Examples: --otel-url localhost:4318 | --otel-url http://collector:4318 "
+            ),
+        ),
+        BeforeValidator(parse_str_or_list),
+        CLIParameter(
+            name=("--otel-url",),
+            consume_multiple=True,
+            group=Groups.TELEMETRY,
+        ),
+    ] = None
+
+    stream: Annotated[
+        list[str] | None,
+        Field(
+            default=None,
+            description=(
+                "Select which AIPerf telemetry domains to stream over OTel. "
+                "Valid values: 'metrics', 'timing', or 'default'. "
+                "'default' streams both metrics and timing domains. "
+                "If omitted and --otel-url is set, default behavior is used. "
+                "Examples: --stream metrics | --stream timing | --stream default "
+                "| --stream metrics timing"
+            ),
+        ),
+        BeforeValidator(parse_str_or_list),
+        CLIParameter(
+            name=("--stream",),
+            consume_multiple=True,
+            group=Groups.TELEMETRY,
+        ),
+    ] = None
+
     _gpu_telemetry_mode: GPUTelemetryMode = GPUTelemetryMode.SUMMARY
     _gpu_telemetry_collector_type: GPUTelemetryCollectorType = (
         GPUTelemetryCollectorType.DCGM
     )
     _gpu_telemetry_urls: list[str] = []
     _gpu_telemetry_metrics_file: Path | None = None
+    _otel_metrics_urls: list[str] = []
+    _otel_stream_metrics_enabled: bool = True
+    _otel_stream_timing_enabled: bool = True
 
     @model_validator(mode="after")
     def _parse_gpu_telemetry_config(self) -> Self:
@@ -572,6 +652,71 @@ class UserConfig(BaseConfig):
     def gpu_telemetry_disabled(self) -> bool:
         """Check if GPU telemetry collection is disabled."""
         return self.no_gpu_telemetry
+
+    @model_validator(mode="after")
+    def _parse_otel_config(self) -> Self:
+        """Parse and normalize OTel collector URL configuration."""
+        valid_telemetry_values = {"metrics", "timing", "default"}
+        selected_values = [value.lower() for value in (self.stream or [])]
+
+        if not selected_values:
+            # Default behavior is to stream both domains when selection is omitted.
+            self._otel_stream_metrics_enabled = True
+            self._otel_stream_timing_enabled = True
+        else:
+            invalid_values = [
+                value
+                for value in selected_values
+                if value not in valid_telemetry_values
+            ]
+            if invalid_values:
+                raise ValueError(
+                    "Invalid --stream value(s): "
+                    + ", ".join(sorted(set(invalid_values)))
+                    + ". "
+                    "Valid options are: metrics, timing, default."
+                )
+            if "default" in selected_values:
+                # Default mode means stream both domains, even if combined with others.
+                self._otel_stream_metrics_enabled = True
+                self._otel_stream_timing_enabled = True
+            else:
+                self._otel_stream_metrics_enabled = "metrics" in selected_values
+                self._otel_stream_timing_enabled = "timing" in selected_values
+
+        if not self.otel_url:
+            self._otel_metrics_urls = []
+            return self
+
+        self._otel_metrics_urls = [
+            _normalize_otel_metrics_url(url) for url in self.otel_url
+        ]
+        return self
+
+    @property
+    def otel_metrics_urls(self) -> list[str]:
+        """Get the normalized OTLP/HTTP metrics endpoint URLs."""
+        return self._otel_metrics_urls
+
+    @property
+    def otel_metrics_url(self) -> str | None:
+        """Get the first normalized OTLP/HTTP metrics endpoint URL."""
+        return self._otel_metrics_urls[0] if self._otel_metrics_urls else None
+
+    @property
+    def otel_streaming_enabled(self) -> bool:
+        """Check if OTel streaming is enabled."""
+        return bool(self._otel_metrics_urls)
+
+    @property
+    def otel_stream_metrics_enabled(self) -> bool:
+        """Check if request-level metric telemetry is enabled for OTel streaming."""
+        return self._otel_stream_metrics_enabled
+
+    @property
+    def otel_stream_timing_enabled(self) -> bool:
+        """Check if phase-level timing telemetry is enabled for OTel streaming."""
+        return self._otel_stream_timing_enabled
 
     server_metrics: Annotated[
         list[str] | None,
@@ -961,4 +1106,10 @@ class UserConfig(BaseConfig):
             raise ValueError(
                 "At least one stop condition must be set (--request-count, --num-sessions, or --benchmark-duration)"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_accuracy_config(self) -> Self:
+        """Validate accuracy benchmarking configuration."""
+        # Stub: validation logic will be added when accuracy mode is implemented
         return self

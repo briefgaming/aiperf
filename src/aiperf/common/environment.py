@@ -7,12 +7,14 @@ Provides a hierarchical, type-safe configuration system using Pydantic BaseSetti
 All settings can be configured via environment variables with the AIPERF_ prefix.
 
 Structure:
+    Environment.CONFIG.*         - Configuration file paths for distributed deployments
     Environment.DATASET.*        - Dataset management
     Environment.DEV.*            - Development and debugging settings
     Environment.GPU.*            - GPU telemetry collection
     Environment.HTTP.*           - HTTP client socket and connection settings
     Environment.LOGGING.*        - Logging configuration
     Environment.METRICS.*        - Metrics collection and storage
+    Environment.OTEL.*           - OTel metrics streaming
     Environment.RECORD.*         - Record processing
     Environment.SERVER_METRICS.* - Server metrics collection
     Environment.SERVICE.*        - Service lifecycle and communication
@@ -49,6 +51,29 @@ from aiperf.plugin.enums import ServiceType
 _logger = AIPerfLogger(__name__)
 
 __all__ = ["Environment"]
+
+
+class _ConfigSettings(BaseSettings):
+    """Configuration file paths for distributed deployments.
+
+    Controls paths to configuration files loaded by services running in containers.
+    These are primarily used by `aiperf service` when running in Kubernetes.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AIPERF_CONFIG_",
+    )
+
+    SERVICE_FILE: Path | None = Field(
+        default=None,
+        description="Path to service configuration JSON/YAML file. "
+        "Default: /etc/aiperf/service_config.json in Kubernetes deployments.",
+    )
+    USER_FILE: Path | None = Field(
+        default=None,
+        description="Path to user configuration JSON/YAML file. "
+        "Default: /etc/aiperf/user_config.json in Kubernetes deployments.",
+    )
 
 
 class _DatasetSettings(BaseSettings):
@@ -358,6 +383,42 @@ class _MetricsSettings(BaseSettings):
     )
 
 
+class _OTelSettings(BaseSettings):
+    """OpenTelemetry metrics streaming configuration.
+
+    Controls buffering and flush behavior for OTLP metric streaming.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AIPERF_OTEL_",
+    )
+
+    FLUSH_INTERVAL_SECONDS: float = Field(
+        ge=0.1,
+        le=60.0,
+        default=2.0,
+        description="Interval in seconds between periodic OTel metrics flushes",
+    )
+    MAX_BATCH_RECORDS: int = Field(
+        ge=1,
+        le=1000000,
+        default=500,
+        description="Maximum number of metric records to include in a single OTel flush",
+    )
+    MAX_BUFFERED_RECORDS: int = Field(
+        ge=1,
+        le=10000000,
+        default=10000,
+        description="Maximum number of buffered metric records before oldest records are dropped",
+    )
+    REQUEST_TIMEOUT_SECONDS: float = Field(
+        ge=0.1,
+        le=300.0,
+        default=10.0,
+        description="Timeout in seconds for OTel collector HTTP requests",
+    )
+
+
 class _RecordSettings(BaseSettings):
     """Record processing and export configuration.
 
@@ -590,6 +651,28 @@ class _ServiceSettings(BaseSettings):
         default=10.0,
         description="Warning threshold in milliseconds for event loop latency (default: 10ms). "
         "If the actual sleep duration exceeds the expected duration by this amount, a warning is logged.",
+    )
+    # Health server settings for Kubernetes probes
+    HEALTH_ENABLED: bool = Field(
+        default=False,
+        description="Enable the lightweight health server for Kubernetes liveness/readiness probes. "
+        "When enabled, non-API services will start an HTTP server serving /healthz and /readyz endpoints.",
+    )
+    HEALTH_HOST: str = Field(
+        default="127.0.0.1",
+        description="Host to bind the health server to. Use '0.0.0.0' for Kubernetes deployments.",
+    )
+    HEALTH_PORT: int = Field(
+        ge=1,
+        le=65535,
+        default=8080,
+        description="Port for the health server HTTP endpoints (/healthz, /readyz).",
+    )
+    HEALTH_REQUEST_TIMEOUT: float = Field(
+        ge=0.1,
+        le=60.0,
+        default=5.0,
+        description="Timeout in seconds for reading health check HTTP requests.",
     )
 
     @model_validator(mode="after")
@@ -853,6 +936,10 @@ class _Environment(BaseSettings):
     )
 
     # Nested subsystem settings (alphabetically ordered)
+    CONFIG: _ConfigSettings = Field(
+        default_factory=_ConfigSettings,
+        description="Configuration file paths for distributed deployments",
+    )
     DATASET: _DatasetSettings = Field(
         default_factory=_DatasetSettings,
         description="Dataset loading and configuration settings",
@@ -876,6 +963,10 @@ class _Environment(BaseSettings):
     METRICS: _MetricsSettings = Field(
         default_factory=_MetricsSettings,
         description="Metrics collection and storage settings",
+    )
+    OTEL: _OTelSettings = Field(
+        default_factory=_OTelSettings,
+        description="OpenTelemetry metrics streaming settings",
     )
     RECORD: _RecordSettings = Field(
         default_factory=_RecordSettings,

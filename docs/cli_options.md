@@ -7,6 +7,10 @@ SPDX-License-Identifier: Apache-2.0
 
 ## `aiperf` Commands
 
+### [`--install-completion`](#aiperf---install-completion)
+
+Install shell completion for this application.
+
 ### [`plugins`](#aiperf-plugins)
 
 Explore AIPerf plugins: aiperf plugins [category] [type]
@@ -15,15 +19,35 @@ Explore AIPerf plugins: aiperf plugins [category] [type]
 
 Analyze mooncake trace for prefix statistics
 
+### [`service`](#aiperf-service)
+
+Run an AIPerf service in a single process.
+
 ### [`profile`](#aiperf-profile)
 
 Run the Profile subcommand.
 
-[Endpoint](#endpoint) • [Input](#input) • [Audio Input](#audio-input) • [Image Input](#image-input) • [Video Input](#video-input) • [Prompt](#prompt) • [Input Sequence Length (ISL)](#input-sequence-length-isl) • [Output Sequence Length (OSL)](#output-sequence-length-osl) • [Prefix Prompt](#prefix-prompt) • [Rankings](#rankings) • [Synthesis](#synthesis) • [Conversation Input](#conversation-input) • [Output](#output) • [Tokenizer](#tokenizer) • [Load Generator](#load-generator) • [Telemetry](#telemetry) • [Server Metrics](#server-metrics) • [ZMQ Communication](#zmq-communication) • [Workers](#workers) • [Service](#service)
+[Endpoint](#endpoint) • [Input](#input) • [Audio Input](#audio-input) • [Image Input](#image-input) • [Video Input](#video-input) • [Prompt](#prompt) • [Input Sequence Length (ISL)](#input-sequence-length-isl) • [Output Sequence Length (OSL)](#output-sequence-length-osl) • [Prefix Prompt](#prefix-prompt) • [Rankings](#rankings) • [Synthesis](#synthesis) • [Conversation Input](#conversation-input) • [Output](#output) • [Tokenizer](#tokenizer) • [Load Generator](#load-generator) • [Multi-Run Confidence Reporting](#multi-run-confidence-reporting) • [Accuracy](#accuracy) • [Telemetry](#telemetry) • [Server Metrics](#server-metrics) • [ZMQ Communication](#zmq-communication) • [Workers](#workers) • [Service](#service)
 
 ### [`plot`](#aiperf-plot)
 
 Generate visualizations from AIPerf profiling data.
+
+<hr>
+
+## `aiperf --install-completion`
+
+Install shell completion for this application.
+
+This command generates and installs the completion script to the appropriate location for your shell. After installation, you may need to restart your shell or source your shell configuration file.
+
+#### `--shell` `<str>`
+
+Shell type for completion. If not specified, attempts to auto-detect current shell.
+
+#### `-o`, `--output` `<str>`
+
+Output path for the completion script. If not specified, uses shell-specific default.
 
 <hr>
 
@@ -34,7 +58,7 @@ Explore AIPerf plugins: aiperf plugins [category] [type]
 #### `--category` `<str>`
 
 Category to explore.
-<br>_Choices: [`arrival_pattern`, `communication`, `communication_client`, `console_exporter`, `custom_dataset_loader`, `data_exporter`, `dataset_backing_store`, `dataset_client_store`, `dataset_composer`, `dataset_sampler`, `endpoint`, `gpu_telemetry_collector`, `plot`, `ramp`, `record_processor`, `results_processor`, `service`, `service_manager`, `timing_strategy`, `transport`, `ui`, `url_selection_strategy`, `zmq_proxy`]_
+<br>_Choices: [`accuracy_benchmark`, `accuracy_grader`, `arrival_pattern`, `communication`, `communication_client`, `console_exporter`, `custom_dataset_loader`, `data_exporter`, `dataset_backing_store`, `dataset_client_store`, `dataset_composer`, `dataset_sampler`, `endpoint`, `gpu_telemetry_collector`, `plot`, `ramp`, `record_processor`, `results_processor`, `service`, `service_manager`, `timing_strategy`, `transport`, `ui`, `url_selection_strategy`, `zmq_proxy`]_
 
 #### `--name` `<str>`
 
@@ -66,6 +90,41 @@ KV cache block size for analysis (default: 512).
 #### `--output-file` `<str>`
 
 Optional output path for analysis report (JSON).
+
+<hr>
+
+## `aiperf service`
+
+Run an AIPerf service in a single process.
+
+_Advanced use only — intended for developers and Kubernetes/distributed deployments where services run in separate containers or nodes._
+
+For standard single-node benchmarking, use the `aiperf profile` command instead.
+
+#### `--type` `<str>` _(Required)_
+
+Service type to run.
+<br>_Choices: [`dataset_manager`, `gpu_telemetry_manager`, `record_processor`, `records_manager`, `server_metrics_manager`, `system_controller`, `timing_manager`, `worker`, `worker_manager`]_
+
+#### `--user-config-file` `<str>`
+
+Path to the user configuration file (JSON or YAML). Falls back to AIPERF_CONFIG_USER_FILE environment variable.
+
+#### `--service-config-file` `<str>`
+
+Path to the service configuration file (JSON or YAML). Falls back to AIPERF_CONFIG_SERVICE_FILE environment variable, then to default ServiceConfig if neither is set.
+
+#### `--service-id` `<str>`
+
+Unique identifier for the service instance. Useful when running multiple instances of the same service type.
+
+#### `--health-host` `<str>`
+
+Host to bind the health server to. Falls back to AIPERF_SERVICE_HEALTH_HOST environment variable.
+
+#### `--health-port` `<int>`
+
+HTTP port for health endpoints (/healthz, /readyz). Required for Kubernetes liveness and readiness probes. Falls back to AIPERF_SERVICE_HEALTH_PORT environment variable.
 
 <hr>
 
@@ -728,6 +787,71 @@ Duration in seconds to ramp request rate from a proportional minimum to target. 
 Duration in seconds to ramp warmup request rate from a proportional minimum to target. Start rate is calculated as target * (update_interval / duration). If not set, uses `--request-rate-ramp-duration` value.
 <br>_Constraints: > 0_
 
+### Multi-Run Confidence Reporting
+
+#### `--num-profile-runs` `<int>`
+
+Number of profile runs to execute for confidence reporting. Must be between 1 and 10. When set to 1 (default), runs a single benchmark. When set to >1, runs multiple benchmarks and computes aggregate statistics (mean, std, confidence intervals, coefficient of variation) across runs. Useful for quantifying variance and establishing confidence in results.
+<br>_Constraints: ≥ 1, ≤ 10_
+<br>_Default: `1`_
+
+#### `--profile-run-cooldown-seconds` `<float>`
+
+Cooldown duration in seconds between profile runs. Only applies when --num-profile-runs > 1. Allows the system to stabilize between runs (e.g., clear caches, cool down GPUs). Default is 0 (no cooldown).
+<br>_Constraints: ≥ 0_
+<br>_Default: `0.0`_
+
+#### `--confidence-level` `<float>`
+
+Confidence level for computing confidence intervals (0-1). Only applies when --num-profile-runs > 1. Common values: 0.90 (90%), 0.95 (95%, default), 0.99 (99%). Higher values produce wider confidence intervals.
+<br>_Constraints: > 0, < 1_
+<br>_Default: `0.95`_
+
+#### `--profile-run-disable-warmup-after-first`, `--no-profile-run-disable-warmup-after-first`
+
+Disable warmup for profile runs after the first. Only applies when --num-profile-runs > 1. When True (default), only the first run includes warmup, subsequent runs measure steady-state performance for more accurate aggregate statistics. When False, all runs include warmup (useful for long cooldown periods or when testing cold-start performance).
+<br>_Default: `True`_
+
+#### `--set-consistent-seed`, `--no-set-consistent-seed`
+
+Automatically set random seed for consistent workloads across runs. Only applies when --num-profile-runs > 1. When True (default), automatically sets --random-seed=42 if not specified, ensuring identical workloads across all runs for valid statistical comparison. When False, preserves None seed, resulting in different workloads per run (not recommended for confidence reporting as it produces invalid statistics). If --random-seed is explicitly set, that value is always used regardless of this setting.
+<br>_Default: `True`_
+
+### Accuracy
+
+#### `--accuracy-benchmark` `<str>`
+
+Accuracy benchmark to run (e.g., mmlu, aime, hellaswag). When set, enables accuracy benchmarking mode alongside performance profiling.
+<br>_Choices: [`mmlu`, `aime`, `hellaswag`, `bigbench`, `aime24`, `aime25`, `math_500`, `gpqa_diamond`, `lcb_codegeneration`]_
+
+#### `--accuracy-tasks` `<list>`
+
+Specific tasks or subtasks within the benchmark to evaluate (e.g., specific MMLU subjects). If not set, all tasks are included.
+
+#### `--accuracy-n-shots` `<int>`
+
+Number of few-shot examples to include in the prompt. 0 means zero-shot evaluation. Maximum 8.
+<br>_Default: `0`_
+
+#### `--accuracy-enable-cot`
+
+Enable chain-of-thought prompting for accuracy evaluation. Adds reasoning instructions to the prompt.
+<br>_Flag (no value required)_
+
+#### `--accuracy-grader` `<str>`
+
+Override the default grader for the selected benchmark (e.g., exact_match, math, multiple_choice, code_execution). If not set, uses the benchmark's default grader.
+<br>_Choices: [`exact_match`, `math`, `multiple_choice`, `code_execution`]_
+
+#### `--accuracy-system-prompt` `<str>`
+
+Custom system prompt to use for accuracy evaluation. Overrides any benchmark-specific system prompt.
+
+#### `--accuracy-verbose`
+
+Enable verbose output for accuracy evaluation, showing per-problem grading details.
+<br>_Flag (no value required)_
+
 ### Telemetry
 
 #### `--gpu-telemetry` `<list>`
@@ -737,6 +861,14 @@ Enable GPU telemetry console display and optionally specify: (1) 'pynvml' to use
 #### `--no-gpu-telemetry`
 
 Disable GPU telemetry collection entirely.
+
+#### `--otel-url` `<list>`
+
+Enable real-time metric streaming to an OpenTelemetry collector via OTLP. Accepts one collector URL. Each entry can be a collector base URL or full OTLP metrics endpoint. If no path is specified, '/v1/metrics' is appended automatically. Examples: --otel-url localhost:4318 | --otel-url http://collector:4318.
+
+#### `--stream` `<list>`
+
+Select which AIPerf telemetry domains to stream over OTel. Valid values: 'metrics', 'timing', or 'default'. 'default' streams both metrics and timing domains. If omitted and --otel-url is set, default behavior is used. Examples: --stream metrics | --stream timing | --stream default | --stream metrics timing.
 
 ### Server Metrics
 
