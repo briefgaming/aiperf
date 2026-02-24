@@ -101,11 +101,6 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             ) from exc
 
         resource = Resource.create(self._build_resource_attributes())
-        if len(self._otel_metrics_urls) > 1:
-            self.warning(
-                "Multiple OTel collector URLs were provided. "
-                "Using only the first endpoint for this processor."
-            )
         exporter = OTLPMetricExporter(
             endpoint=self._otel_metrics_urls[0],
             timeout=Environment.OTEL.REQUEST_TIMEOUT_SECONDS,
@@ -157,11 +152,15 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
     @on_stop
     async def _flush_and_shutdown(self) -> None:
         """Final flush before shutdown and close SDK resources."""
-        await self.flush(force=True)
-        if self._meter_provider is not None:
-            await asyncio.to_thread(self._meter_provider.shutdown)
-            self._meter_provider = None
-            self._meter = None
+        try:
+            await self.flush(force=True)
+        except Exception as exc:
+            self.warning(f"Failed to flush metrics: {exc}")
+        finally:
+            if self._meter_provider is not None:
+                await asyncio.to_thread(self._meter_provider.shutdown)
+                self._meter_provider = None
+                self._meter = None
 
     async def _get_or_create_histogram(self, metric_name: str) -> Any:
         """Create or reuse a histogram instrument for a metric name."""

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,6 +25,7 @@ from aiperf.credit.messages import (
 from aiperf.plugin.enums import TimingMode
 from aiperf.records.records_manager import RecordsManager
 from aiperf.timing.config import CreditPhaseConfig
+from tests.harness import mock_plugin
 
 
 # Helper functions
@@ -531,13 +531,10 @@ class TestRecordsManagerInitialization:
                 "aiperf.records.records_manager.PullClientMixin.__init__",
                 new=_fake_pull_client_init,
             ),
-            patch(
-                "aiperf.records.records_manager.plugins.iter_entries",
-                return_value=[SimpleNamespace(name="otel_metrics_streamer")],
-            ),
-            patch(
-                "aiperf.records.records_manager.plugins.get_class",
-                return_value=DisabledProcessor,
+            mock_plugin(
+                "results_processor",
+                "otel_metrics_streamer",
+                DisabledProcessor,
             ),
         ):
             manager = RecordsManager(

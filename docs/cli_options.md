@@ -862,9 +862,9 @@ Enable GPU telemetry console display and optionally specify: (1) 'pynvml' to use
 
 Disable GPU telemetry collection entirely.
 
-#### `--otel-url` `<list>`
+#### `--otel-url` `<str>`
 
-Enable real-time metric streaming to an OpenTelemetry collector via OTLP. Accepts one collector URL. Each entry can be a collector base URL or full OTLP metrics endpoint. If no path is specified, '/v1/metrics' is appended automatically. Examples: --otel-url localhost:4318 | --otel-url http://collector:4318.
+Enable real-time metric streaming to an OpenTelemetry collector via OTLP. Accepts one collector URL. The value can be a collector base URL or full OTLP metrics endpoint. If no path is specified, '/v1/metrics' is appended automatically. Examples: --otel-url localhost:4318 | --otel-url http://collector:4318.
 
 #### `--stream` `<list>`
 

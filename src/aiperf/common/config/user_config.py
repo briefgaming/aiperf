@@ -500,21 +500,19 @@ class UserConfig(BaseConfig):
     ] = False
 
     otel_url: Annotated[
-        list[str] | None,
+        str | None,
         Field(
             default=None,
             description=(
                 "Enable real-time metric streaming to an OpenTelemetry collector via OTLP. "
                 "Accepts one collector URL. "
-                "Each entry can be a collector base URL or full OTLP metrics endpoint. "
+                "The value can be a collector base URL or full OTLP metrics endpoint. "
                 "If no path is specified, '/v1/metrics' is appended automatically. "
                 "Examples: --otel-url localhost:4318 | --otel-url http://collector:4318 "
             ),
         ),
-        BeforeValidator(parse_str_or_list),
         CLIParameter(
             name=("--otel-url",),
-            consume_multiple=True,
             group=Groups.TELEMETRY,
         ),
     ] = None
@@ -684,13 +682,11 @@ class UserConfig(BaseConfig):
                 self._otel_stream_metrics_enabled = "metrics" in selected_values
                 self._otel_stream_timing_enabled = "timing" in selected_values
 
-        if not self.otel_url:
+        if self.otel_url is None:
             self._otel_metrics_urls = []
             return self
 
-        self._otel_metrics_urls = [
-            _normalize_otel_metrics_url(url) for url in self.otel_url
-        ]
+        self._otel_metrics_urls = [_normalize_otel_metrics_url(self.otel_url)]
         return self
 
     @property

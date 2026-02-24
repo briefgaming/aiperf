@@ -174,14 +174,14 @@ class RecordsManager(PullClientMixin, BaseComponentService):
 
                 else:
                     self._metric_results_processors.append(results_processor)
-                    if entry.name == "otel_metrics_streamer":
+                    if entry.name == ResultsProcessorType.OTEL_METRICS_STREAMER:
                         self._timing_results_processors.append(results_processor)
 
                 self.debug(
                     f"Created results processor: {entry.name}: {results_processor.__class__.__name__}"
                 )
             except PostProcessorDisabled as e:
-                if entry.name == "otel_metrics_streamer":
+                if entry.name == ResultsProcessorType.OTEL_METRICS_STREAMER:
                     self.info(
                         f"OTel metrics streamer is disabled and will not be used: {e}"
                     )
