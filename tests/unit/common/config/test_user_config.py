@@ -519,6 +519,15 @@ class TestOTelStreamingConfig:
             make_config(otel_url=invalid_otel_url)
 
     @pytest.mark.parametrize(
+        "invalid_otel_url",
+        ["ftp://collector:4318", "file://collector:4318"],
+    )
+    def test_invalid_otel_scheme(self, invalid_otel_url: str):
+        """Unsupported collector URL schemes are rejected."""
+        with pytest.raises(ValueError, match="Invalid --otel-url value"):
+            make_config(otel_url=invalid_otel_url)
+
+    @pytest.mark.parametrize(
         "stream_value,metrics_enabled,timing_enabled",
         [
             ("metrics", True, False),
@@ -635,6 +644,25 @@ class TestMLflowConfig:
             "reports/*.json",
             "plots/*.png",
         ]
+
+    def test_mlflow_artifact_glob_entries_are_stripped(self):
+        config = make_config(
+            mlflow_tracking_uri="http://localhost:5000",
+            mlflow_artifact_globs=[" reports/*.json ", " plots/*.png "],
+        )
+        assert config.mlflow_resolved_artifact_globs == [
+            "reports/*.json",
+            "plots/*.png",
+        ]
+
+    def test_mlflow_artifact_glob_empty_entry_is_rejected(self):
+        with pytest.raises(
+            ValueError, match="--mlflow-artifact-glob entries cannot be empty"
+        ):
+            make_config(
+                mlflow_tracking_uri="http://localhost:5000",
+                mlflow_artifact_globs=["reports/*.json", "   "],
+            )
 
 
 # =============================================================================

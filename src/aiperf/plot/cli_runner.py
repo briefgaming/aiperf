@@ -16,7 +16,19 @@ from aiperf.plot.plot_controller import PlotController
 def _load_mlflow_metadata(metadata_file: Path) -> dict[str, Any]:
     if not metadata_file.exists():
         return {}
-    return orjson.loads(metadata_file.read_bytes())
+    try:
+        metadata = orjson.loads(metadata_file.read_bytes())
+    except orjson.JSONDecodeError as exc:
+        raise ValueError(
+            f"expected JSON object for MLflow metadata in {metadata_file} but failed to decode"
+        ) from exc
+
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            f"expected JSON object for MLflow metadata in {metadata_file} "
+            f"but got {type(metadata).__name__}"
+        )
+    return metadata
 
 
 def _resolve_mlflow_upload_target(

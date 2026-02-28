@@ -403,3 +403,31 @@ class TestResolveMlflowUploadTarget:
                 tracking_uri="http://mlflow:5000",
                 run_id="run-123",
             )
+
+    def test_rejects_non_object_metadata(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run1"
+        run_dir.mkdir(parents=True)
+        metadata_file = run_dir / MLflowDefaults.EXPORT_METADATA_FILE
+        metadata_file.write_text('["not-an-object"]', encoding="utf-8")
+
+        with pytest.raises(
+            ValueError, match="expected JSON object for MLflow metadata"
+        ):
+            _resolve_mlflow_upload_target(
+                input_paths=[run_dir],
+                tracking_uri=None,
+                run_id=None,
+            )
+
+    def test_rejects_malformed_metadata_json(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run1"
+        run_dir.mkdir(parents=True)
+        metadata_file = run_dir / MLflowDefaults.EXPORT_METADATA_FILE
+        metadata_file.write_text("{invalid-json", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="failed to decode"):
+            _resolve_mlflow_upload_target(
+                input_paths=[run_dir],
+                tracking_uri=None,
+                run_id=None,
+            )

@@ -78,6 +78,10 @@ def _normalize_otel_metrics_url(url: str) -> str:
         raise ValueError(
             f"Invalid --otel-url value: {url!r}. Expected host[:port] or a full URL."
         )
+    if parsed.scheme.lower() not in ("http", "https"):
+        raise ValueError(
+            f"Invalid --otel-url value: {url!r}. Expected host[:port] or a full URL."
+        )
 
     path = parsed.path.rstrip("/")
     if path.endswith("/v1/metrics"):
@@ -794,6 +798,15 @@ class UserConfig(BaseConfig):
     @model_validator(mode="after")
     def _validate_mlflow_config(self) -> Self:
         """Validate and normalize MLflow post-run upload configuration."""
+        if self.mlflow_artifact_globs is not None:
+            normalized_globs: list[str] = []
+            for glob in self.mlflow_artifact_globs:
+                normalized_glob = glob.strip()
+                if not normalized_glob:
+                    raise ValueError("--mlflow-artifact-glob entries cannot be empty.")
+                normalized_globs.append(normalized_glob)
+            self.mlflow_artifact_globs = normalized_globs
+
         if self.mlflow_tracking_uri is None:
             return self
 
