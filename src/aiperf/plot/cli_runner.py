@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """CLI runner for plot command."""
 
-import json
 from pathlib import Path
 from typing import Any
+
+import orjson
 
 from aiperf.common.config import MLflowDefaults
 from aiperf.exporters.mlflow_data_exporter import MLflowDataExporter
@@ -15,7 +16,7 @@ from aiperf.plot.plot_controller import PlotController
 def _load_mlflow_metadata(metadata_file: Path) -> dict[str, Any]:
     if not metadata_file.exists():
         return {}
-    return json.loads(metadata_file.read_text(encoding="utf-8"))
+    return orjson.loads(metadata_file.read_bytes())
 
 
 def _resolve_mlflow_upload_target(
