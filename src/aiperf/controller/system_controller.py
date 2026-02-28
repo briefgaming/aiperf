@@ -904,9 +904,6 @@ class SystemController(SignalHandlerMixin, BaseService):
         # Export console output with complete dataset including telemetry
         await exporter_manager.export_console(console=console)
 
-        # export to mlflow completing data and console exports
-        await exporter_manager.export_mlflow()
-
         console.print()
         self._print_cli_command(console)
         self._print_benchmark_duration(console)
