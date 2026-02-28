@@ -58,6 +58,7 @@ dependencies = [
   "tqdm>=4.67.1",
   "transformers>=4.56.0", # Lowest compatible version for dynamo backends
   "uvloop~=0.21.0; platform_system != 'Windows'",
+  "mlflow>=3.10.0",
 ]
 
 # CLI Entrypoints

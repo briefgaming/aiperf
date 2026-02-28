@@ -34,8 +34,8 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
     ) -> None:
         super().__init__(user_config=user_config, **kwargs)
         self.service_id = service_id or "records-manager"
-        self._otel_metrics_urls = user_config.otel_metrics_urls
-        if not self._otel_metrics_urls:
+        self._otel_metrics_url = user_config.otel_metrics_url
+        if not self._otel_metrics_url:
             self.info("OTel metrics streaming is disabled (set --otel-url to enable)")
             raise PostProcessorDisabled(
                 "OTel metrics streaming is disabled (set --otel-url to enable)"
@@ -102,7 +102,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
 
         resource = Resource.create(self._build_resource_attributes())
         exporter = OTLPMetricExporter(
-            endpoint=self._otel_metrics_urls[0],
+            endpoint=self._otel_metrics_url,
             timeout=Environment.OTEL.REQUEST_TIMEOUT_SECONDS,
         )
 
@@ -119,7 +119,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             metric_readers=[reader],
         )
         self._meter = self._meter_provider.get_meter("aiperf.records")
-        self.info(f"OTel metrics streaming enabled: {self._otel_metrics_urls[0]}")
+        self.info(f"OTel metrics streaming enabled: {self._otel_metrics_url}")
 
     async def process_result(self, record_data: OTelResultData) -> None:
         """Record metric data for export via the OpenTelemetry SDK."""

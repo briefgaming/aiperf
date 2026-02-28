@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aiperf.plot.cli_runner import run_plot_controller
+from aiperf.common.config import MLflowDefaults
+from aiperf.plot.cli_runner import _resolve_mlflow_upload_target, run_plot_controller
 from aiperf.plot.constants import PlotMode, PlotTheme
 
 
@@ -323,4 +324,82 @@ class TestRunPlotController:
                 paths=[str(tmp_path)],
                 output=str(tmp_path / "output"),
                 theme="invalid_theme",
+            )
+
+    @patch("aiperf.plot.cli_runner._upload_generated_plots_to_mlflow")
+    @patch("aiperf.plot.cli_runner.PlotController")
+    def test_mlflow_upload_invoked_only_when_enabled(
+        self,
+        mock_controller_class: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test generated plots are uploaded to MLflow only with --mlflow-upload."""
+        output_dir = tmp_path / "output"
+        run_dir = tmp_path / "run1"
+        mock_controller = MagicMock()
+        mock_controller.run.return_value = [output_dir / "ttft_over_time.png"]
+        mock_controller_class.return_value = mock_controller
+
+        run_plot_controller(
+            paths=[str(run_dir)],
+            output=str(output_dir),
+            mlflow_upload=True,
+            mlflow_tracking_uri="http://mlflow:5000",
+            mlflow_run_id="run-123",
+        )
+
+        mock_upload.assert_called_once_with(
+            generated_files=[output_dir / "ttft_over_time.png"],
+            input_paths=[run_dir],
+            output_dir=output_dir,
+            tracking_uri="http://mlflow:5000",
+            run_id="run-123",
+        )
+
+    @patch("aiperf.plot.cli_runner.PlotController")
+    def test_mlflow_upload_rejected_in_dashboard_mode(
+        self,
+        mock_controller_class: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test --mlflow-upload cannot be combined with --dashboard."""
+        mock_controller = MagicMock()
+        mock_controller.run.return_value = None
+        mock_controller_class.return_value = mock_controller
+
+        with pytest.raises(ValueError, match="not supported in dashboard mode"):
+            run_plot_controller(
+                paths=[str(tmp_path / "run1")],
+                output=str(tmp_path / "output"),
+                dashboard=True,
+                mlflow_upload=True,
+            )
+
+
+class TestResolveMlflowUploadTarget:
+    def test_resolves_tracking_and_run_from_metadata(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run1"
+        run_dir.mkdir(parents=True)
+        metadata_file = run_dir / MLflowDefaults.EXPORT_METADATA_FILE
+        metadata_file.write_text(
+            '{"tracking_uri":"http://mlflow:5000","run_id":"run-abc"}',
+            encoding="utf-8",
+        )
+
+        tracking_uri, run_id = _resolve_mlflow_upload_target(
+            input_paths=[run_dir],
+            tracking_uri=None,
+            run_id=None,
+        )
+
+        assert tracking_uri == "http://mlflow:5000"
+        assert run_id == "run-abc"
+
+    def test_requires_single_path(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="exactly one run path"):
+            _resolve_mlflow_upload_target(
+                input_paths=[tmp_path / "run1", tmp_path / "run2"],
+                tracking_uri="http://mlflow:5000",
+                run_id="run-123",
             )

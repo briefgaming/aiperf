@@ -15,9 +15,14 @@ from aiperf.common.config.base_config import BaseConfig
 from aiperf.common.config.cli_parameter import CLIParameter, DisableCLI
 from aiperf.common.config.config_defaults import (
     LoadGeneratorDefaults,
+    MLflowDefaults,
     ServerMetricsDefaults,
 )
-from aiperf.common.config.config_validators import coerce_value, parse_str_or_list
+from aiperf.common.config.config_validators import (
+    coerce_value,
+    parse_str_or_dict_as_tuple_list,
+    parse_str_or_list,
+)
 from aiperf.common.config.endpoint_config import EndpointConfig
 from aiperf.common.config.groups import Groups
 from aiperf.common.config.input_config import InputConfig
@@ -467,6 +472,89 @@ class UserConfig(BaseConfig):
         DisableCLI(reason="This is automatically generated at runtime"),
     ] = None
 
+    mlflow_tracking_uri: Annotated[
+        str | None,
+        Field(
+            default=MLflowDefaults.TRACKING_URI,
+            description=(
+                "MLflow Tracking Server URI used for post-run uploads "
+                "(e.g., http://localhost:5000). "
+                "When set, AIPerf uploads params, metrics, tags, and artifacts "
+                "(including plots) to MLflow after profiling completes."
+            ),
+        ),
+        CLIParameter(
+            name=("--mlflow-tracking-uri",),
+            group=Groups.OUTPUT,
+        ),
+    ] = MLflowDefaults.TRACKING_URI
+
+    mlflow_experiment: Annotated[
+        str,
+        Field(
+            default=MLflowDefaults.EXPERIMENT,
+            description=(
+                "MLflow experiment name for post-run uploads. "
+                "Ignored unless --mlflow-tracking-uri is set."
+            ),
+        ),
+        CLIParameter(
+            name=("--mlflow-experiment",),
+            group=Groups.OUTPUT,
+        ),
+    ] = MLflowDefaults.EXPERIMENT
+
+    mlflow_run_name: Annotated[
+        str | None,
+        Field(
+            default=MLflowDefaults.RUN_NAME,
+            description=(
+                "Optional MLflow run name for post-run uploads. "
+                "If omitted, AIPerf derives a name from benchmark metadata."
+            ),
+        ),
+        CLIParameter(
+            name=("--mlflow-run-name",),
+            group=Groups.OUTPUT,
+        ),
+    ] = MLflowDefaults.RUN_NAME
+
+    mlflow_tags: Annotated[
+        Any,
+        Field(
+            default=MLflowDefaults.TAGS,
+            description=(
+                "Additional MLflow run tags to attach on upload. "
+                "Specify as key:value pairs (e.g., --mlflow-tag team:perf) "
+                "or as JSON string."
+            ),
+        ),
+        BeforeValidator(parse_str_or_dict_as_tuple_list),
+        CLIParameter(
+            name=("--mlflow-tag",),
+            consume_multiple=True,
+            group=Groups.OUTPUT,
+        ),
+    ] = MLflowDefaults.TAGS
+
+    mlflow_artifact_globs: Annotated[
+        list[str] | None,
+        Field(
+            default=MLflowDefaults.ARTIFACT_GLOBS,
+            description=(
+                "Optional artifact glob patterns for MLflow upload, relative to "
+                "--output-artifact-dir. Can be specified multiple times. "
+                "If not set, sensible defaults include exports and plot files."
+            ),
+        ),
+        BeforeValidator(parse_str_or_list),
+        CLIParameter(
+            name=("--mlflow-artifact-glob",),
+            consume_multiple=True,
+            group=Groups.OUTPUT,
+        ),
+    ] = MLflowDefaults.ARTIFACT_GLOBS
+
     gpu_telemetry: Annotated[
         list[str] | None,
         Field(
@@ -544,7 +632,7 @@ class UserConfig(BaseConfig):
     )
     _gpu_telemetry_urls: list[str] = []
     _gpu_telemetry_metrics_file: Path | None = None
-    _otel_metrics_urls: list[str] = []
+    _otel_metrics_url: str | None = None
     _otel_stream_metrics_enabled: bool = True
     _otel_stream_timing_enabled: bool = True
 
@@ -683,26 +771,44 @@ class UserConfig(BaseConfig):
                 self._otel_stream_timing_enabled = "timing" in selected_values
 
         if self.otel_url is None:
-            self._otel_metrics_urls = []
+            self._otel_metrics_url = None
             return self
 
-        self._otel_metrics_urls = [_normalize_otel_metrics_url(self.otel_url)]
+        self._otel_metrics_url = _normalize_otel_metrics_url(self.otel_url)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_mlflow_config(self) -> Self:
+        """Validate and normalize MLflow post-run upload configuration."""
+        if self.mlflow_tracking_uri is None:
+            return self
+
+        tracking_uri = self.mlflow_tracking_uri.strip()
+        if not tracking_uri:
+            raise ValueError("--mlflow-tracking-uri cannot be empty.")
+        self.mlflow_tracking_uri = tracking_uri
+
+        if not self.mlflow_experiment.strip():
+            raise ValueError(
+                "--mlflow-experiment cannot be empty when --mlflow-tracking-uri is set."
+            )
+        self.mlflow_experiment = self.mlflow_experiment.strip()
+
+        if self.mlflow_run_name is not None:
+            run_name = self.mlflow_run_name.strip()
+            self.mlflow_run_name = run_name or None
+
         return self
 
     @property
-    def otel_metrics_urls(self) -> list[str]:
-        """Get the normalized OTLP/HTTP metrics endpoint URLs."""
-        return self._otel_metrics_urls
-
-    @property
     def otel_metrics_url(self) -> str | None:
-        """Get the first normalized OTLP/HTTP metrics endpoint URL."""
-        return self._otel_metrics_urls[0] if self._otel_metrics_urls else None
+        """Get the normalized OTLP/HTTP metrics endpoint URL."""
+        return self._otel_metrics_url
 
     @property
     def otel_streaming_enabled(self) -> bool:
         """Check if OTel streaming is enabled."""
-        return bool(self._otel_metrics_urls)
+        return bool(self._otel_metrics_url)
 
     @property
     def otel_stream_metrics_enabled(self) -> bool:
@@ -713,6 +819,29 @@ class UserConfig(BaseConfig):
     def otel_stream_timing_enabled(self) -> bool:
         """Check if phase-level timing telemetry is enabled for OTel streaming."""
         return self._otel_stream_timing_enabled
+
+    @property
+    def mlflow_enabled(self) -> bool:
+        """Check if MLflow post-run upload is enabled."""
+        return self.mlflow_tracking_uri is not None
+
+    @property
+    def mlflow_tags_dict(self) -> dict[str, str]:
+        """Get MLflow tags as a normalized dict[str, str]."""
+        tags: dict[str, str] = {}
+        for key, value in self.mlflow_tags or []:
+            key_str = str(key).strip()
+            if not key_str:
+                continue
+            tags[key_str] = str(value)
+        return tags
+
+    @property
+    def mlflow_resolved_artifact_globs(self) -> list[str]:
+        """Get explicit or default artifact glob patterns for MLflow upload."""
+        if self.mlflow_artifact_globs:
+            return self.mlflow_artifact_globs
+        return list(MLflowDefaults.DEFAULT_ARTIFACT_GLOBS)
 
     server_metrics: Annotated[
         list[str] | None,

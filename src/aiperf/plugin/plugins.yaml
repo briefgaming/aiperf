@@ -645,6 +645,13 @@ data_exporter:
       JSON exporter for aggregated metrics. Exports benchmark results to JSON
       format with full metric details and structured data. Always loaded.
 
+  mlflow:
+    class: aiperf.exporters.mlflow_data_exporter:MLflowDataExporter
+    description: |
+      MLflow post-run exporter that uploads benchmark params, metrics, tags,
+      and generated artifacts (including plots) to an MLflow Tracking server.
+      Enabled when --mlflow-tracking-uri is configured.
+
   raw_record_aggregator:
     class: aiperf.post_processors.raw_record_writer_processor:RawRecordAggregator
     description: |

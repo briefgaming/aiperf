@@ -2,10 +2,80 @@
 # SPDX-License-Identifier: Apache-2.0
 """CLI runner for plot command."""
 
+import json
 from pathlib import Path
+from typing import Any
 
+from aiperf.common.config import MLflowDefaults
+from aiperf.exporters.mlflow_data_exporter import MLflowDataExporter
 from aiperf.plot.constants import PLOT_LOG_FILE, PlotMode, PlotTheme
 from aiperf.plot.plot_controller import PlotController
+
+
+def _load_mlflow_metadata(metadata_file: Path) -> dict[str, Any]:
+    if not metadata_file.exists():
+        return {}
+    return json.loads(metadata_file.read_text(encoding="utf-8"))
+
+
+def _resolve_mlflow_upload_target(
+    *,
+    input_paths: list[Path],
+    tracking_uri: str | None,
+    run_id: str | None,
+) -> tuple[str, str]:
+    if len(input_paths) != 1:
+        raise ValueError(
+            "--mlflow-upload requires exactly one run path in --paths so the target run can be resolved."
+        )
+
+    metadata_file = input_paths[0] / MLflowDefaults.EXPORT_METADATA_FILE
+    metadata = _load_mlflow_metadata(metadata_file)
+    resolved_tracking_uri = tracking_uri or metadata.get("tracking_uri")
+    resolved_run_id = run_id or metadata.get("run_id")
+
+    if not resolved_tracking_uri:
+        raise ValueError(
+            "MLflow tracking URI is required for --mlflow-upload. "
+            "Provide --mlflow-tracking-uri or ensure "
+            f"{metadata_file} contains 'tracking_uri'."
+        )
+    if not resolved_run_id:
+        raise ValueError(
+            "MLflow run id is required for --mlflow-upload. "
+            "Provide --mlflow-run-id or ensure "
+            f"{metadata_file} contains 'run_id'."
+        )
+    return str(resolved_tracking_uri), str(resolved_run_id)
+
+
+def _upload_generated_plots_to_mlflow(
+    *,
+    generated_files: list[Path],
+    input_paths: list[Path],
+    output_dir: Path,
+    tracking_uri: str | None,
+    run_id: str | None,
+) -> None:
+    if not generated_files:
+        print("No plots were generated; skipping MLflow plot upload.")
+        return
+
+    resolved_tracking_uri, resolved_run_id = _resolve_mlflow_upload_target(
+        input_paths=input_paths,
+        tracking_uri=tracking_uri,
+        run_id=run_id,
+    )
+    uploaded = MLflowDataExporter.upload_artifacts_to_run(
+        tracking_uri=resolved_tracking_uri,
+        run_id=resolved_run_id,
+        artifact_directory=output_dir,
+        artifact_files=generated_files,
+    )
+    artifact_word = "artifact" if len(uploaded) == 1 else "artifacts"
+    print(
+        f"Uploaded {len(uploaded)} plot {artifact_word} to MLflow run {resolved_run_id}."
+    )
 
 
 def run_plot_controller(
@@ -18,6 +88,9 @@ def run_plot_controller(
     dashboard: bool = False,
     host: str = "127.0.0.1",
     port: int = 8050,
+    mlflow_upload: bool = False,
+    mlflow_tracking_uri: str | None = None,
+    mlflow_run_id: str | None = None,
 ) -> None:
     """Generate plots from AIPerf profiling data.
 
@@ -34,6 +107,9 @@ def run_plot_controller(
         dashboard: Launch interactive dashboard server instead of generating static PNGs.
         host: Host for dashboard server (only used with --dashboard). Defaults to 127.0.0.1.
         port: Port for dashboard server (only used with dashboard=True). Defaults to 8050.
+        mlflow_upload: Upload generated plot artifacts to an existing MLflow run.
+        mlflow_tracking_uri: MLflow tracking URI override used with --mlflow-upload.
+        mlflow_run_id: MLflow run id override used with --mlflow-upload.
     """
     input_paths = paths or ["./artifacts"]
     input_paths = [Path(p) for p in input_paths]
@@ -66,6 +142,20 @@ def run_plot_controller(
 
     # Only print file count for non-dashboard modes
     if mode != PlotMode.DASHBOARD:
+        result = result or []
         plot_word = "plot" if len(result) == 1 else "plots"
         print(f"\nSaved {len(result)} {plot_word} to: {output_dir}")
+        if mlflow_upload:
+            _upload_generated_plots_to_mlflow(
+                generated_files=result,
+                input_paths=input_paths,
+                output_dir=output_dir,
+                tracking_uri=mlflow_tracking_uri,
+                run_id=mlflow_run_id,
+            )
+    elif mlflow_upload:
+        raise ValueError(
+            "--mlflow-upload is not supported in dashboard mode. "
+            "Run without --dashboard to export PNG plots."
+        )
     print(f"Logs: {output_dir / PLOT_LOG_FILE}")

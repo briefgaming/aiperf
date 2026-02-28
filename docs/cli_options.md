@@ -638,6 +638,27 @@ Include HTTP trace data (timestamps, chunks, headers, socket info) in profile_ex
 Display HTTP trace timing metrics in the console at the end of the benchmark. Shows detailed timing breakdown: blocked, DNS, connecting, sending, waiting (TTFB), receiving, and total duration following k6 naming conventions.
 <br>_Flag (no value required)_
 
+#### `--mlflow-tracking-uri` `<str>`
+
+MLflow Tracking Server URI used for post-run uploads (e.g., http://localhost:5000). When set, AIPerf uploads params, metrics, tags, and artifacts (including plots) to MLflow after profiling completes.
+
+#### `--mlflow-experiment` `<str>`
+
+MLflow experiment name for post-run uploads. Ignored unless --mlflow-tracking-uri is set.
+<br>_Default: `aiperf`_
+
+#### `--mlflow-run-name` `<str>`
+
+Optional MLflow run name for post-run uploads. If omitted, AIPerf derives a name from benchmark metadata.
+
+#### `--mlflow-tag` `<str>`
+
+Additional MLflow run tags to attach on upload. Specify as key:value pairs (e.g., --mlflow-tag team:perf) or as JSON string.
+
+#### `--mlflow-artifact-glob` `<list>`
+
+Optional artifact glob patterns for MLflow upload, relative to --output-artifact-dir. Can be specified multiple times. If not set, sensible defaults include exports and plot files.
+
 ### Tokenizer
 
 #### `--tokenizer` `<str>`
@@ -973,6 +994,12 @@ aiperf plot --config my_plots.yaml
 
 # Show detailed error tracebacks
 aiperf plot --verbose
+
+# Generate plots and upload them to the MLflow run from mlflow_export.json
+aiperf plot --paths artifacts/my-run --mlflow-upload
+
+# Generate plots and upload to an explicit MLflow run
+aiperf plot --paths artifacts/my-run --mlflow-upload             --mlflow-tracking-uri http://127.0.0.1:5000 --mlflow-run-id <run_id>
 ```
 
 #### `--paths`, `--empty-paths` `<list>`
@@ -1009,3 +1036,15 @@ Host for dashboard server (only used with --dashboard). Defaults to 127.0.0.1.
 
 Port for dashboard server (only used with --dashboard). Defaults to 8050.
 <br>_Default: `8050`_
+
+#### `--mlflow-upload`, `--no-mlflow-upload`
+
+Upload generated PNG plot artifacts to an existing MLflow run.
+
+#### `--mlflow-tracking-uri` `<str>`
+
+Optional MLflow tracking URI override for plot upload.
+
+#### `--mlflow-run-id` `<str>`
+
+Optional MLflow run id override for plot upload.

@@ -567,6 +567,75 @@ class TestOTelStreamingConfig:
         assert config.otel_stream_timing_enabled is True
 
 
+class TestMLflowConfig:
+    """Tests for MLflow post-run export configuration parsing and validation."""
+
+    def test_disabled_by_default(self):
+        config = make_config()
+        assert config.mlflow_enabled is False
+        assert config.mlflow_tracking_uri is None
+
+    @pytest.mark.parametrize(
+        "tracking_uri,experiment,run_name",
+        [
+            ("http://localhost:5000", "aiperf", None),
+            (" https://mlflow.internal ", " perf-runs ", " nightly "),
+        ],
+    )
+    def test_mlflow_normalization(
+        self, tracking_uri: str, experiment: str, run_name: str | None
+    ):
+        config = make_config(
+            mlflow_tracking_uri=tracking_uri,
+            mlflow_experiment=experiment,
+            mlflow_run_name=run_name,
+        )
+        assert config.mlflow_enabled is True
+        assert config.mlflow_tracking_uri == tracking_uri.strip()
+        assert config.mlflow_experiment == experiment.strip()
+        if run_name is None:
+            assert config.mlflow_run_name is None
+        else:
+            assert config.mlflow_run_name == run_name.strip()
+
+    @pytest.mark.parametrize("invalid_uri", ["", "   "])
+    def test_mlflow_tracking_uri_cannot_be_empty(self, invalid_uri: str):
+        with pytest.raises(ValueError, match="--mlflow-tracking-uri cannot be empty"):
+            make_config(mlflow_tracking_uri=invalid_uri)
+
+    def test_mlflow_experiment_cannot_be_empty_when_enabled(self):
+        with pytest.raises(
+            ValueError,
+            match="--mlflow-experiment cannot be empty when --mlflow-tracking-uri is set",
+        ):
+            make_config(
+                mlflow_tracking_uri="http://localhost:5000",
+                mlflow_experiment="   ",
+            )
+
+    def test_mlflow_tags_parse_to_dict(self):
+        config = make_config(
+            mlflow_tracking_uri="http://localhost:5000",
+            mlflow_tags="team:perf,env:ci",
+        )
+        assert config.mlflow_tags_dict == {"team": "perf", "env": "ci"}
+
+    def test_mlflow_artifact_glob_defaults(self):
+        config = make_config(mlflow_tracking_uri="http://localhost:5000")
+        assert config.mlflow_resolved_artifact_globs
+        assert "**/*.png" in config.mlflow_resolved_artifact_globs
+
+    def test_mlflow_artifact_glob_override(self):
+        config = make_config(
+            mlflow_tracking_uri="http://localhost:5000",
+            mlflow_artifact_globs=["reports/*.json", "plots/*.png"],
+        )
+        assert config.mlflow_resolved_artifact_globs == [
+            "reports/*.json",
+            "plots/*.png",
+        ]
+
+
 # =============================================================================
 # Load Generator Validation Tests
 # =============================================================================

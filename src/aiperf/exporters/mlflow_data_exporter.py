@@ -1,0 +1,315 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from aiperf.common.config import MLflowDefaults
+from aiperf.common.exceptions import DataExporterDisabled
+from aiperf.common.mixins import AIPerfLoggerMixin
+from aiperf.exporters.exporter_config import ExporterConfig, FileExportInfo
+
+
+class MLflowDataExporter(AIPerfLoggerMixin):
+    """Uploads benchmark summary metrics and artifacts to MLflow Tracking."""
+
+    _PLOT_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".html"}
+
+    def __init__(self, exporter_config: ExporterConfig, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._results = exporter_config.results
+        self._user_config = exporter_config.user_config
+
+        if not self._user_config.mlflow_enabled:
+            raise DataExporterDisabled(
+                "MLflow export is disabled (set --mlflow-tracking-uri to enable)."
+            )
+        if self._results is None:
+            raise DataExporterDisabled(
+                "MLflow export is disabled (no profile results available)."
+            )
+
+        self._tracking_uri = self._user_config.mlflow_tracking_uri
+        self._experiment_name = self._user_config.mlflow_experiment
+        self._run_name = self._user_config.mlflow_run_name
+        self._artifact_directory = self._user_config.output.artifact_directory
+        self._artifact_globs = self._user_config.mlflow_resolved_artifact_globs
+        self._metadata_file = (
+            self._artifact_directory / MLflowDefaults.EXPORT_METADATA_FILE
+        )
+
+    def get_export_info(self) -> FileExportInfo:
+        return FileExportInfo(
+            export_type="MLflow Tracking Export Metadata",
+            file_path=self._metadata_file,
+        )
+
+    async def export(self) -> None:
+        """Run blocking MLflow client operations in a worker thread."""
+        await asyncio.to_thread(self._export_sync)
+
+    @classmethod
+    def _import_mlflow_module(cls) -> Any:
+        """Import mlflow with a consistent dependency error message."""
+        try:
+            import mlflow
+        except ImportError as exc:
+            raise RuntimeError(
+                "MLflow export enabled but mlflow package is not installed. "
+                "Install with: uv add mlflow"
+            ) from exc
+        return mlflow
+
+    @classmethod
+    def resolve_artifact_path(
+        cls,
+        *,
+        artifact_directory: Path,
+        artifact_file: Path,
+    ) -> str:
+        """Classify artifact destination under MLflow artifact tree."""
+        try:
+            relative_parent = artifact_file.relative_to(artifact_directory).parent
+        except ValueError:
+            relative_parent = Path(".")
+
+        base = (
+            "plots" if artifact_file.suffix.lower() in cls._PLOT_SUFFIXES else "exports"
+        )
+        parts = list(relative_parent.parts)
+        if parts and parts[0] == base:
+            parts = parts[1:]
+            relative_parent = Path(*parts) if parts else Path(".")
+        if relative_parent.as_posix() == ".":
+            return base
+        return f"{base}/{relative_parent.as_posix()}"
+
+    @staticmethod
+    def _relative_artifact_name(
+        *,
+        artifact_directory: Path,
+        artifact_file: Path,
+    ) -> str:
+        try:
+            return artifact_file.relative_to(artifact_directory).as_posix()
+        except ValueError:
+            return artifact_file.name
+
+    @classmethod
+    def log_artifacts(
+        cls,
+        *,
+        artifact_directory: Path,
+        artifact_files: list[Path],
+        log_artifact: Callable[[str, str | None], None],
+    ) -> list[str]:
+        """Log artifacts using provided callback and return uploaded names."""
+        uploaded_artifacts: list[str] = []
+        for artifact_file in artifact_files:
+            artifact_path = cls.resolve_artifact_path(
+                artifact_directory=artifact_directory,
+                artifact_file=artifact_file,
+            )
+            log_artifact(str(artifact_file), artifact_path)
+            uploaded_artifacts.append(
+                cls._relative_artifact_name(
+                    artifact_directory=artifact_directory,
+                    artifact_file=artifact_file,
+                )
+            )
+        return uploaded_artifacts
+
+    @classmethod
+    def upload_artifacts_to_run(
+        cls,
+        *,
+        tracking_uri: str,
+        run_id: str,
+        artifact_directory: Path,
+        artifact_files: list[Path],
+    ) -> list[str]:
+        """Upload artifacts to an existing MLflow run."""
+        mlflow = cls._import_mlflow_module()
+        mlflow.set_tracking_uri(tracking_uri)
+        with mlflow.start_run(run_id=run_id):
+            return cls.log_artifacts(
+                artifact_directory=artifact_directory,
+                artifact_files=artifact_files,
+                log_artifact=mlflow.log_artifact,
+            )
+
+    def _export_sync(self) -> None:
+        mlflow = self._import_mlflow_module()
+        try:
+            from mlflow.entities import Metric, Param, RunTag
+            from mlflow.tracking import MlflowClient
+        except ImportError as exc:
+            raise RuntimeError(
+                "MLflow export enabled but mlflow package is not installed. "
+                "Install with: uv add mlflow"
+            ) from exc
+
+        if self._tracking_uri is None:
+            raise RuntimeError("MLflow tracking URI is unexpectedly None")
+
+        mlflow.set_tracking_uri(self._tracking_uri)
+        mlflow.set_experiment(self._experiment_name)
+        client = MlflowClient()
+
+        run_name = self._run_name or self._derive_default_run_name()
+        timestamp_ms = int(time.time() * 1000)
+        metric_payload = self._build_metric_payload()
+        param_payload = self._build_param_payload()
+        tag_payload = self._build_tag_payload()
+        uploaded_artifacts: list[str] = []
+
+        with mlflow.start_run(run_name=run_name) as run:
+            run_id = run.info.run_id
+
+            metrics = [
+                Metric(key, value, timestamp_ms, 0)
+                for key, value in metric_payload.items()
+            ]
+            params = [Param(key, value) for key, value in param_payload.items()]
+            tags = [RunTag(key, value) for key, value in tag_payload.items()]
+
+            if metrics or params or tags:
+                client.log_batch(
+                    run_id=run_id,
+                    metrics=metrics,
+                    params=params,
+                    tags=tags,
+                )
+
+            uploaded_artifacts = self.log_artifacts(
+                artifact_directory=self._artifact_directory,
+                artifact_files=self._iter_artifact_files(),
+                log_artifact=mlflow.log_artifact,
+            )
+
+        self._write_export_metadata(
+            run_id=run_id,
+            run_name=run_name,
+            metric_keys=sorted(metric_payload),
+            param_keys=sorted(param_payload),
+            tag_keys=sorted(tag_payload),
+            uploaded_artifacts=uploaded_artifacts,
+        )
+        self.info(
+            f"Uploaded MLflow run '{run_name}' ({run_id}) with "
+            f"{len(metric_payload)} metrics and {len(uploaded_artifacts)} artifacts."
+        )
+
+    def _derive_default_run_name(self) -> str:
+        benchmark_id = self._user_config.benchmark_id
+        if benchmark_id:
+            return f"aiperf-{benchmark_id[:8]}"
+        return f"aiperf-{int(time.time())}"
+
+    def _build_metric_payload(self) -> dict[str, float]:
+        payload: dict[str, float] = {}
+        for metric in self._results.records or []:
+            if metric.avg is None:
+                continue
+            try:
+                payload[metric.tag] = float(metric.avg)
+            except (TypeError, ValueError):
+                self.debug(
+                    f"Skipping non-numeric metric for MLflow export: {metric.tag}"
+                )
+        payload["aiperf.completed_requests"] = float(self._results.completed)
+        if self._results.total_expected is not None:
+            payload["aiperf.total_expected_requests"] = float(
+                self._results.total_expected
+            )
+        return payload
+
+    def _build_param_payload(self) -> dict[str, str]:
+        params: dict[str, str] = {
+            "endpoint.type": str(self._user_config.endpoint.type),
+            "endpoint.models": ",".join(self._user_config.endpoint.model_names),
+            "endpoint.urls": ",".join(self._user_config.endpoint.urls),
+            "timing.mode": str(self._user_config.timing_mode),
+            "output.artifact_directory": str(
+                self._user_config.output.artifact_directory
+            ),
+        }
+
+        if self._user_config.loadgen.concurrency is not None:
+            params["loadgen.concurrency"] = str(self._user_config.loadgen.concurrency)
+        if self._user_config.loadgen.request_rate is not None:
+            params["loadgen.request_rate"] = str(self._user_config.loadgen.request_rate)
+        if self._user_config.loadgen.request_count is not None:
+            params["loadgen.request_count"] = str(
+                self._user_config.loadgen.request_count
+            )
+        if self._user_config.loadgen.benchmark_duration is not None:
+            params["loadgen.benchmark_duration"] = str(
+                self._user_config.loadgen.benchmark_duration
+            )
+        if self._user_config.cli_command:
+            params["aiperf.cli_command"] = self._user_config.cli_command
+
+        return params
+
+    def _build_tag_payload(self) -> dict[str, str]:
+        from aiperf import __version__ as aiperf_version
+
+        tags = {
+            "aiperf.version": aiperf_version,
+            "aiperf.was_cancelled": str(self._results.was_cancelled).lower(),
+        }
+        if self._user_config.benchmark_id:
+            tags["benchmark_id"] = self._user_config.benchmark_id
+        tags.update(self._user_config.mlflow_tags_dict)
+        return tags
+
+    def _iter_artifact_files(self) -> list[Path]:
+        files: list[Path] = []
+        seen: set[str] = set()
+        for pattern in self._artifact_globs:
+            for candidate in sorted(self._artifact_directory.glob(pattern)):
+                if not candidate.is_file():
+                    continue
+                resolved = str(candidate.resolve())
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                files.append(candidate)
+        return files
+
+    def _resolve_artifact_path(self, artifact_file: Path) -> str:
+        return self.resolve_artifact_path(
+            artifact_directory=self._artifact_directory,
+            artifact_file=artifact_file,
+        )
+
+    def _write_export_metadata(
+        self,
+        *,
+        run_id: str,
+        run_name: str,
+        metric_keys: list[str],
+        param_keys: list[str],
+        tag_keys: list[str],
+        uploaded_artifacts: list[str],
+    ) -> None:
+        self._artifact_directory.mkdir(parents=True, exist_ok=True)
+        metadata: dict[str, Any] = {
+            "tracking_uri": self._tracking_uri,
+            "experiment": self._experiment_name,
+            "run_id": run_id,
+            "run_name": run_name,
+            "metric_keys": metric_keys,
+            "param_keys": param_keys,
+            "tag_keys": tag_keys,
+            "uploaded_artifacts": uploaded_artifacts,
+            "exported_at_ns": time.time_ns(),
+        }
+        self._metadata_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
