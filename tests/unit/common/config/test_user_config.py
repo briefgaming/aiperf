@@ -670,9 +670,10 @@ class TestMLflowConfig:
                 mlflow_artifact_globs=["reports/*.json", "   "],
             )
 
-    def test_mlflow_requires_enable_flag(self):
-        with pytest.raises(ValueError, match="MLflow options require --mlflow"):
-            make_config(mlflow_tracking_uri="http://localhost:5000")
+    def test_mlflow_tracking_uri_without_enable_flag_is_ignored(self):
+        config = make_config(mlflow_tracking_uri="http://localhost:5000")
+        assert config.mlflow_enabled is False
+        assert config.mlflow_tracking_uri is None
 
     def test_mlflow_enable_flag_requires_tracking_uri(self):
         with pytest.raises(

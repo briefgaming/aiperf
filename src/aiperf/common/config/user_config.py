@@ -814,26 +814,6 @@ class UserConfig(BaseConfig):
     @model_validator(mode="after")
     def _validate_mlflow_config(self) -> Self:
         """Validate and normalize MLflow post-run upload configuration."""
-        explicit_mlflow_fields = {
-            "mlflow_tracking_uri",
-            "mlflow_experiment",
-            "mlflow_run_name",
-            "mlflow_tags",
-            "mlflow_artifact_globs",
-        }
-
-        if not self.mlflow:
-            if explicit_mlflow_fields.intersection(self.model_fields_set):
-                raise ValueError(
-                    "MLflow options require --mlflow to be set "
-                    "(e.g. --mlflow --mlflow-tracking-uri http://localhost:5000)."
-                )
-            self.mlflow_tracking_uri = None
-            return self
-
-        if self.mlflow_tracking_uri is None:
-            raise ValueError("--mlflow requires --mlflow-tracking-uri to be set.")
-
         if self.mlflow_artifact_globs is not None:
             normalized_globs: list[str] = []
             for glob in self.mlflow_artifact_globs:
@@ -843,8 +823,24 @@ class UserConfig(BaseConfig):
                 normalized_globs.append(normalized_glob)
             self.mlflow_artifact_globs = normalized_globs
 
-        if self.mlflow_tracking_uri is None:
+        if not self.mlflow:
+            # MLflow integration is explicitly gated by --mlflow.
+            # Keep other MLflow fields parseable but disable integration.
+            self.mlflow_tracking_uri = None
+            fields_set = getattr(self, "__pydantic_fields_set__", None)
+            if isinstance(fields_set, set):
+                for field_name in (
+                    "mlflow_tracking_uri",
+                    "mlflow_experiment",
+                    "mlflow_run_name",
+                    "mlflow_tags",
+                    "mlflow_artifact_globs",
+                ):
+                    fields_set.discard(field_name)
             return self
+
+        if self.mlflow_tracking_uri is None:
+            raise ValueError("--mlflow requires --mlflow-tracking-uri to be set.")
 
         tracking_uri = self.mlflow_tracking_uri.strip()
         if not tracking_uri:
