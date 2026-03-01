@@ -37,7 +37,7 @@ def _install_fake_mlflow_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, A
         "log_batch_calls": [],
         "artifacts": [],
     }
-    run_id = "run-123"
+    default_run_id = "run-123"
 
     class FakeMetric:
         def __init__(self, key: str, value: float, timestamp: int, step: int) -> None:
@@ -75,8 +75,11 @@ def _install_fake_mlflow_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, A
             )
 
     class FakeRunContext:
+        def __init__(self, run_id: str) -> None:
+            self._run_id = run_id
+
         def __enter__(self) -> Any:
-            info = types.SimpleNamespace(run_id=run_id)
+            info = types.SimpleNamespace(run_id=self._run_id)
             return types.SimpleNamespace(info=info)
 
         def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
@@ -97,7 +100,8 @@ def _install_fake_mlflow_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, A
     ) -> FakeRunContext:
         state["run_names"].append(run_name)
         state["run_ids"].append(run_id)
-        return FakeRunContext()
+        selected_run_id = run_id or default_run_id
+        return FakeRunContext(selected_run_id)
 
     def log_artifact(local_path: str, artifact_path: str | None = None) -> None:
         state["artifacts"].append((local_path, artifact_path))
@@ -322,6 +326,50 @@ class TestMLflowDataExporter:
             for local_path, _ in state["artifacts"]
         ]
         assert uploaded == ["plots/latency.png"]
+
+    @pytest.mark.asyncio
+    async def test_export_reuses_live_streaming_run_when_metadata_matches(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        sample_results: ProfileResults,
+        mlflow_user_config: UserConfig,
+    ) -> None:
+        _write_artifact(tmp_path / "profile_export_aiperf.json")
+        live_run_id = "live-run-555"
+        benchmark_id = mlflow_user_config.benchmark_id
+        assert benchmark_id is not None
+        metadata = {
+            "tracking_uri": "http://mlflow:5000",
+            "experiment": "aiperf-tests",
+            "run_id": live_run_id,
+            "run_name": "live-stream-run",
+            "benchmark_id": benchmark_id,
+            "live_streaming": True,
+        }
+        (tmp_path / "mlflow_export.json").write_text(
+            json.dumps(metadata), encoding="utf-8"
+        )
+
+        state = _install_fake_mlflow_modules(monkeypatch)
+        config = ExporterConfig(
+            results=sample_results,
+            user_config=mlflow_user_config,
+            service_config=ServiceConfig(),
+            telemetry_results=None,
+        )
+        exporter = MLflowDataExporter(config)
+        await exporter.export()
+
+        assert state["run_ids"] == [live_run_id]
+        assert state["run_names"] == [None]
+        assert state["log_batch_calls"][0]["run_id"] == live_run_id
+
+        written_metadata = json.loads(
+            (tmp_path / "mlflow_export.json").read_text(encoding="utf-8")
+        )
+        assert written_metadata["run_id"] == live_run_id
+        assert written_metadata["reused_live_run"] is True
 
     def test_upload_artifacts_to_run_supports_plot_only_upload(
         self,

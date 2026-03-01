@@ -222,6 +222,22 @@ def user_config_otel(tmp_artifact_dir) -> UserConfig:
     )
 
 
+@pytest.fixture
+def user_config_otel_mlflow(tmp_artifact_dir) -> UserConfig:
+    return UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+        ),
+        output=OutputConfig(
+            artifact_directory=tmp_artifact_dir,
+        ),
+        otel_url="collector:4318",
+        mlflow_tracking_uri="http://mlflow:5000",
+        mlflow_experiment="aiperf-tests",
+    )
+
+
 _ORIGINAL_IMPORT = builtins.__import__
 
 
@@ -546,6 +562,131 @@ class TestOTelMetricsResultsProcessor:
         provider = provider_cls.instances[-1]
         await processor.flush(force=True)
         assert len(provider.force_flush_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_initialize_uses_fanout_when_mlflow_is_enabled(
+        self,
+        fake_otel: dict[str, object],
+        service_config: ServiceConfig,
+        user_config_otel_mlflow: UserConfig,
+    ) -> None:
+        processor = OTelMetricsResultsProcessor(
+            service_id="records-manager",
+            service_config=service_config,
+            user_config=user_config_otel_mlflow,
+        )
+        processor._start_fanout_process = AsyncMock()
+
+        await processor._initialize_meter_provider()
+
+        processor._start_fanout_process.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_process_result_fanout_emits_metric_and_timing_events(
+        self,
+        fake_otel: dict[str, object],
+        service_config: ServiceConfig,
+        user_config_otel_mlflow: UserConfig,
+    ) -> None:
+        class FakeQueue:
+            def __init__(self) -> None:
+                self.events: list[dict[str, object]] = []
+
+            def put_nowait(self, event: dict[str, object]) -> None:
+                self.events.append(event)
+
+            def close(self) -> None:
+                return
+
+        processor = OTelMetricsResultsProcessor(
+            service_id="records-manager",
+            service_config=service_config,
+            user_config=user_config_otel_mlflow,
+        )
+        fake_queue = FakeQueue()
+        processor._use_fanout_process = True
+        processor._streaming_ready = True
+        processor._fanout_queue = fake_queue
+
+        metric_record = create_metric_records_message(
+            results=[{"request_latency_ns": 123_000_000, "request_count": 1}]
+        ).to_data()
+        await processor.process_result(metric_record)
+
+        timing_stats = CreditPhaseStats(
+            phase=CreditPhase.PROFILING,
+            start_ns=1_000_000_000,
+            requests_end_ns=3_000_000_000,
+            requests_sent=10,
+            requests_completed=8,
+            requests_cancelled=1,
+            request_errors=0,
+            sent_sessions=4,
+            completed_sessions=3,
+            cancelled_sessions=0,
+            total_session_turns=9,
+        )
+        await processor.process_result(timing_stats)
+
+        event_types = [str(event.get("type")) for event in fake_queue.events]
+        assert "histogram_record" in event_types
+        assert "counter_add" in event_types
+        assert "up_down_counter_add" in event_types
+        assert any(
+            event.get("payload", {}).get("metric_name") == "aiperf.request_latency_ns"
+            for event in fake_queue.events
+        )
+
+    @pytest.mark.asyncio
+    async def test_flush_and_stop_emit_fanout_control_events(
+        self,
+        fake_otel: dict[str, object],
+        service_config: ServiceConfig,
+        user_config_otel_mlflow: UserConfig,
+    ) -> None:
+        class FakeQueue:
+            def __init__(self) -> None:
+                self.events: list[dict[str, object]] = []
+                self.closed = False
+
+            def put_nowait(self, event: dict[str, object]) -> None:
+                self.events.append(event)
+
+            def close(self) -> None:
+                self.closed = True
+
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.join_calls: list[float] = []
+                self.terminate_called = False
+
+            def join(self, timeout: float) -> None:
+                self.join_calls.append(timeout)
+
+            def is_alive(self) -> bool:
+                return False
+
+            def terminate(self) -> None:
+                self.terminate_called = True
+
+        processor = OTelMetricsResultsProcessor(
+            service_id="records-manager",
+            service_config=service_config,
+            user_config=user_config_otel_mlflow,
+        )
+        fake_queue = FakeQueue()
+        processor._use_fanout_process = True
+        processor._streaming_ready = True
+        processor._fanout_queue = fake_queue
+        processor._fanout_process = FakeProcess()
+
+        await processor.flush(force=True)
+        await processor._flush_and_shutdown()
+
+        event_types = [str(event.get("type")) for event in fake_queue.events]
+        assert "flush" in event_types
+        assert "shutdown" in event_types
+        assert fake_queue.closed is True
 
     @pytest.mark.asyncio
     async def test_on_stop_flushes_and_shuts_down_provider(

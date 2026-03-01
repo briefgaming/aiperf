@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+import orjson
 
 from aiperf.common.config import MLflowDefaults
 from aiperf.common.exceptions import DataExporterDisabled
@@ -162,14 +163,27 @@ class MLflowDataExporter(AIPerfLoggerMixin):
         mlflow.set_experiment(self._experiment_name)
         client = MlflowClient()
 
-        run_name = self._run_name or self._derive_default_run_name()
+        existing_metadata = self._load_existing_metadata()
+        existing_live_run_id = self._resolve_live_streaming_run_id(existing_metadata)
+        existing_live_run_name = existing_metadata.get("run_name")
+        run_name = self._run_name
+        if run_name is None and isinstance(existing_live_run_name, str):
+            normalized_run_name = existing_live_run_name.strip()
+            if normalized_run_name:
+                run_name = normalized_run_name
+        run_name = run_name or self._derive_default_run_name()
         timestamp_ms = int(time.time() * 1000)
         metric_payload = self._build_metric_payload()
         param_payload = self._build_param_payload()
         tag_payload = self._build_tag_payload()
         uploaded_artifacts: list[str] = []
 
-        with mlflow.start_run(run_name=run_name) as run:
+        if existing_live_run_id is not None:
+            run_context = mlflow.start_run(run_id=existing_live_run_id)
+        else:
+            run_context = mlflow.start_run(run_name=run_name)
+
+        with run_context as run:
             run_id = run.info.run_id
 
             metrics = [
@@ -200,6 +214,8 @@ class MLflowDataExporter(AIPerfLoggerMixin):
             param_keys=sorted(param_payload),
             tag_keys=sorted(tag_payload),
             uploaded_artifacts=uploaded_artifacts,
+            reused_live_run=existing_live_run_id is not None,
+            live_streaming=bool(existing_metadata.get("live_streaming")),
         )
         self.info(
             f"Uploaded MLflow run '{run_name}' ({run_id}) with "
@@ -284,11 +300,45 @@ class MLflowDataExporter(AIPerfLoggerMixin):
                 files.append(candidate)
         return files
 
-    def _resolve_artifact_path(self, artifact_file: Path) -> str:
-        return self.resolve_artifact_path(
-            artifact_directory=self._artifact_directory,
-            artifact_file=artifact_file,
-        )
+    def _load_existing_metadata(self) -> dict[str, Any]:
+        if not self._metadata_file.exists():
+            return {}
+        try:
+            metadata = orjson.loads(self._metadata_file.read_bytes())
+        except orjson.JSONDecodeError:
+            self.warning(
+                f"Ignoring malformed MLflow metadata file: {self._metadata_file}"
+            )
+            return {}
+        if not isinstance(metadata, dict):
+            self.warning(
+                "Ignoring unexpected MLflow metadata payload type in "
+                f"{self._metadata_file}: {type(metadata).__name__}"
+            )
+            return {}
+        return metadata
+
+    def _resolve_live_streaming_run_id(self, metadata: dict[str, Any]) -> str | None:
+        if metadata.get("live_streaming") is not True:
+            return None
+
+        metadata_run_id = metadata.get("run_id")
+        metadata_tracking_uri = metadata.get("tracking_uri")
+        metadata_benchmark_id = metadata.get("benchmark_id")
+        if (
+            not isinstance(metadata_run_id, str)
+            or not metadata_run_id
+            or metadata_tracking_uri != self._tracking_uri
+        ):
+            return None
+
+        current_benchmark_id = self._user_config.benchmark_id
+        if (
+            not isinstance(metadata_benchmark_id, str)
+            or metadata_benchmark_id != current_benchmark_id
+        ):
+            return None
+        return metadata_run_id
 
     def _write_export_metadata(
         self,
@@ -299,6 +349,8 @@ class MLflowDataExporter(AIPerfLoggerMixin):
         param_keys: list[str],
         tag_keys: list[str],
         uploaded_artifacts: list[str],
+        reused_live_run: bool,
+        live_streaming: bool,
     ) -> None:
         self._artifact_directory.mkdir(parents=True, exist_ok=True)
         metadata: dict[str, Any] = {
@@ -306,10 +358,15 @@ class MLflowDataExporter(AIPerfLoggerMixin):
             "experiment": self._experiment_name,
             "run_id": run_id,
             "run_name": run_name,
+            "benchmark_id": self._user_config.benchmark_id,
+            "live_streaming": live_streaming,
+            "reused_live_run": reused_live_run,
             "metric_keys": metric_keys,
             "param_keys": param_keys,
             "tag_keys": tag_keys,
             "uploaded_artifacts": uploaded_artifacts,
             "exported_at_ns": time.time_ns(),
         }
-        self._metadata_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        self._metadata_file.write_bytes(
+            orjson.dumps(metadata, option=orjson.OPT_INDENT_2)
+        )

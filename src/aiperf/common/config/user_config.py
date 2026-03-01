@@ -70,7 +70,8 @@ def _normalize_otel_metrics_url(url: str) -> str:
     if not normalized_url:
         raise ValueError("--otel-url cannot be empty.")
 
-    if not normalized_url.startswith(("http://", "https://")):
+    # Only auto-prefix host[:port] style values. Explicit schemes must be validated as-is.
+    if "://" not in normalized_url:
         normalized_url = f"http://{normalized_url}"
 
     parsed = urlparse(normalized_url)

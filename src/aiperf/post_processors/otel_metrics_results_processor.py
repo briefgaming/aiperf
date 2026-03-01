@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing as mp
 import sys
+from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import dataclass
+from queue import Full
 from typing import Any
 
-from aiperf.common.config import UserConfig
+from aiperf.common.config import MLflowDefaults, UserConfig
 from aiperf.common.enums import CreditPhase
 from aiperf.common.environment import Environment
 from aiperf.common.exceptions import PostProcessorDisabled
@@ -15,12 +20,61 @@ from aiperf.common.hooks import on_init, on_stop
 from aiperf.common.messages.inference_messages import MetricRecordsData
 from aiperf.common.models import CreditPhaseStats, MetricResult
 from aiperf.post_processors.base_metrics_processor import BaseMetricsProcessor
+from aiperf.post_processors.otel_streaming_fanout import (
+    OTelStreamingFanoutConfig,
+    run_otel_streaming_fanout,
+)
 from aiperf.post_processors.strategies import (
     MetricResultsStrategy,
     OTelResultData,
     OTelResultsStrategyProtocol,
     TimingResultsStrategy,
 )
+
+
+@dataclass
+class _FanoutHistogramInstrument:
+    """Proxy histogram instrument that emits events to the fanout queue."""
+
+    metric_name: str
+    unit: str
+    description: str
+    emit_event: Callable[[str, dict[str, Any]], None]
+
+    def record(self, value: float, attributes: dict[str, Any]) -> None:
+        self.emit_event(
+            "histogram_record",
+            {
+                "metric_name": self.metric_name,
+                "unit": self.unit,
+                "description": self.description,
+                "value": float(value),
+                "attributes": attributes,
+            },
+        )
+
+
+@dataclass
+class _FanoutAddInstrument:
+    """Proxy counter-like instrument that emits add events to the fanout queue."""
+
+    event_type: str
+    metric_name: str
+    unit: str
+    description: str
+    emit_event: Callable[[str, dict[str, Any]], None]
+
+    def add(self, value: float, attributes: dict[str, Any]) -> None:
+        self.emit_event(
+            self.event_type,
+            {
+                "metric_name": self.metric_name,
+                "unit": self.unit,
+                "description": self.description,
+                "value": float(value),
+                "attributes": attributes,
+            },
+        )
 
 
 class OTelMetricsResultsProcessor(BaseMetricsProcessor):
@@ -75,12 +129,26 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             Environment.OTEL.REQUEST_TIMEOUT_SECONDS,
             minimum=1000,
         )
+        self._streaming_ready = False
+        self._use_fanout_process = self._should_use_fanout_process()
+        self._fanout_queue: Any | None = None
+        self._fanout_process: mp.Process | None = None
+        self._fanout_dropped_events = 0
+        self._fanout_queue_maxsize = 10000
         self.info("Initialized OTelMetricsResultsProcessor")
 
     @on_init
     async def _initialize_meter_provider(self) -> None:
         """Initialize the OpenTelemetry meter provider."""
         self.info("Initializing OpenTelemetry meter provider")
+        if self._use_fanout_process:
+            await self._start_fanout_process()
+            return
+
+        await self._initialize_in_process_meter_provider()
+
+    async def _initialize_in_process_meter_provider(self) -> None:
+        """Initialize in-process OTel SDK metric export."""
         try:
             from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
                 OTLPMetricExporter,
@@ -119,11 +187,71 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             metric_readers=[reader],
         )
         self._meter = self._meter_provider.get_meter("aiperf.records")
+        self._streaming_ready = True
         self.info(f"OTel metrics streaming enabled: {self._otel_metrics_url}")
+
+    async def _start_fanout_process(self) -> None:
+        """Start a dedicated process that fans out streaming telemetry to OTel + MLflow."""
+        config = OTelStreamingFanoutConfig(
+            endpoint_url=self._otel_metrics_url or "",
+            request_timeout_seconds=Environment.OTEL.REQUEST_TIMEOUT_SECONDS,
+            export_interval_millis=self._to_millis(
+                Environment.OTEL.FLUSH_INTERVAL_SECONDS,
+                minimum=100,
+            ),
+            export_timeout_millis=self._export_timeout_millis,
+            resource_attributes=self._build_resource_attributes(),
+            mlflow_tracking_uri=self.user_config.mlflow_tracking_uri,
+            mlflow_experiment=self.user_config.mlflow_experiment,
+            mlflow_run_name=self.user_config.mlflow_run_name,
+            mlflow_tags=self.user_config.mlflow_tags_dict,
+            benchmark_id=self.user_config.benchmark_id,
+            metadata_file=(
+                self.user_config.output.artifact_directory
+                / MLflowDefaults.EXPORT_METADATA_FILE
+            ),
+        )
+        was_daemon = mp.current_process().daemon
+        if was_daemon:
+            self._set_current_process_daemon(False)
+
+        try:
+            context = mp.get_context()
+            queue = context.Queue(maxsize=self._fanout_queue_maxsize)
+            process = context.Process(
+                target=run_otel_streaming_fanout,
+                args=(queue, config),
+                name=f"aiperf-otel-fanout-{self.service_id}",
+                daemon=True,
+            )
+            await asyncio.to_thread(process.start)
+        except Exception as exc:
+            self.warning(
+                "Failed to start OTel fanout process. Falling back to in-process OTel "
+                f"streaming only. Error={exc!r}"
+            )
+            with suppress(Exception):
+                if "queue" in locals():
+                    queue.close()
+            self._use_fanout_process = False
+            await self._initialize_in_process_meter_provider()
+            return
+        finally:
+            if was_daemon:
+                self._set_current_process_daemon(True)
+
+        self._fanout_queue = queue
+        self._fanout_process = process
+        self._streaming_ready = True
+        self.info(
+            "OTel metrics streaming enabled with process fanout "
+            f"(OTLP: {self._otel_metrics_url}, "
+            f"MLflow live: {bool(self.user_config.mlflow_tracking_uri)})"
+        )
 
     async def process_result(self, record_data: OTelResultData) -> None:
         """Record metric data for export via the OpenTelemetry SDK."""
-        if self._meter is None:
+        if not self._streaming_ready:
             return
 
         for strategy in self._result_strategies:
@@ -139,6 +267,9 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
 
     async def flush(self, *, force: bool = False) -> None:
         """Force a flush of pending SDK metrics exports."""
+        if self._use_fanout_process:
+            self._queue_fanout_event("flush", {})
+            return
         if self._meter_provider is None:
             return
         await asyncio.to_thread(
@@ -157,10 +288,13 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         except Exception as exc:
             self.warning(f"Failed to flush metrics: {exc}")
         finally:
-            if self._meter_provider is not None:
+            if self._use_fanout_process:
+                await self._stop_fanout_process()
+            elif self._meter_provider is not None:
                 await asyncio.to_thread(self._meter_provider.shutdown)
                 self._meter_provider = None
                 self._meter = None
+            self._streaming_ready = False
 
     async def _get_or_create_histogram(self, metric_name: str) -> Any:
         """Create or reuse a histogram instrument for a metric name."""
@@ -170,13 +304,24 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         async with self._instrument_lock:
             if metric_name in self._histogram_instruments:
                 return self._histogram_instruments[metric_name]
-            if self._meter is None:
-                raise RuntimeError("OTel meter is not initialized")
-            instrument = self._meter.create_histogram(
-                name=f"aiperf.{metric_name}",
-                unit=self._metric_unit(metric_name),
-                description=f"AIPerf streaming metric: {metric_name}",
-            )
+            instrument_name = f"aiperf.{metric_name}"
+            unit = self._metric_unit(metric_name)
+            description = f"AIPerf streaming metric: {metric_name}"
+            if self._use_fanout_process:
+                instrument = _FanoutHistogramInstrument(
+                    metric_name=instrument_name,
+                    unit=unit,
+                    description=description,
+                    emit_event=self._queue_fanout_event,
+                )
+            else:
+                if self._meter is None:
+                    raise RuntimeError("OTel meter is not initialized")
+                instrument = self._meter.create_histogram(
+                    name=instrument_name,
+                    unit=unit,
+                    description=description,
+                )
             self._histogram_instruments[metric_name] = instrument
             return instrument
 
@@ -190,13 +335,22 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         async with self._instrument_lock:
             if metric_name in self._counter_instruments:
                 return self._counter_instruments[metric_name]
-            if self._meter is None:
-                raise RuntimeError("OTel meter is not initialized")
-            instrument = self._meter.create_counter(
-                name=metric_name,
-                unit=unit,
-                description=description,
-            )
+            if self._use_fanout_process:
+                instrument = _FanoutAddInstrument(
+                    event_type="counter_add",
+                    metric_name=metric_name,
+                    unit=unit,
+                    description=description,
+                    emit_event=self._queue_fanout_event,
+                )
+            else:
+                if self._meter is None:
+                    raise RuntimeError("OTel meter is not initialized")
+                instrument = self._meter.create_counter(
+                    name=metric_name,
+                    unit=unit,
+                    description=description,
+                )
             self._counter_instruments[metric_name] = instrument
             return instrument
 
@@ -210,15 +364,77 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         async with self._instrument_lock:
             if metric_name in self._up_down_counter_instruments:
                 return self._up_down_counter_instruments[metric_name]
-            if self._meter is None:
-                raise RuntimeError("OTel meter is not initialized")
-            instrument = self._meter.create_up_down_counter(
-                name=metric_name,
-                unit=unit,
-                description=description,
-            )
+            if self._use_fanout_process:
+                instrument = _FanoutAddInstrument(
+                    event_type="up_down_counter_add",
+                    metric_name=metric_name,
+                    unit=unit,
+                    description=description,
+                    emit_event=self._queue_fanout_event,
+                )
+            else:
+                if self._meter is None:
+                    raise RuntimeError("OTel meter is not initialized")
+                instrument = self._meter.create_up_down_counter(
+                    name=metric_name,
+                    unit=unit,
+                    description=description,
+                )
             self._up_down_counter_instruments[metric_name] = instrument
             return instrument
+
+    async def _stop_fanout_process(self) -> None:
+        """Gracefully stop fanout process and drain final metrics."""
+        if self._fanout_queue is not None:
+            self._queue_fanout_event("shutdown", {})
+
+        if self._fanout_process is not None:
+            await asyncio.to_thread(self._fanout_process.join, 5.0)
+            if self._fanout_process.is_alive():
+                self.warning("OTel fanout process did not stop in time; terminating.")
+                self._fanout_process.terminate()
+                await asyncio.to_thread(self._fanout_process.join, 1.0)
+            self._fanout_process = None
+
+        if self._fanout_queue is not None:
+            with suppress(Exception):
+                self._fanout_queue.close()
+            self._fanout_queue = None
+
+        if self._fanout_dropped_events > 0:
+            self.warning(
+                "Dropped OTel fanout events due to backpressure: "
+                f"{self._fanout_dropped_events}"
+            )
+
+    def _queue_fanout_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Enqueue streaming event for the fanout process without blocking the event loop."""
+        if self._fanout_queue is None:
+            return
+
+        try:
+            self._fanout_queue.put_nowait({"type": event_type, "payload": payload})
+        except Full:
+            self._fanout_dropped_events += 1
+            if self._fanout_dropped_events in {1, 100, 1000}:
+                self.warning(
+                    "OTel fanout queue is full; dropping events "
+                    f"(dropped={self._fanout_dropped_events})."
+                )
+        except Exception as exc:
+            self.warning(f"Failed to enqueue OTel fanout event: {exc!r}")
+
+    def _should_use_fanout_process(self) -> bool:
+        """Use cross-process fanout when MLflow live streaming is configured."""
+        return self.user_config.mlflow_enabled
+
+    @staticmethod
+    def _set_current_process_daemon(daemon: bool) -> None:
+        """Set daemon flag on current process, including fallback for strict assertions."""
+        try:
+            mp.current_process().daemon = daemon
+        except AssertionError:
+            mp.current_process()._config["daemon"] = daemon
 
     def _build_resource_attributes(self) -> dict[str, str]:
         """Build OTLP resource attributes shared across all streamed metrics."""
