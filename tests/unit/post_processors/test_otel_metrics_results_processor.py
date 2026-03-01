@@ -653,6 +653,87 @@ class TestOTelMetricsResultsProcessor:
         processor._start_fanout_process.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_start_fanout_failure_falls_back_to_in_process_for_otel(
+        self,
+        fake_otel: dict[str, object],
+        service_config: ServiceConfig,
+        user_config_otel: UserConfig,
+    ) -> None:
+        class FakeQueue:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        class FakeProcess:
+            def start(self) -> None:
+                raise RuntimeError("fanout start failed")
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.queue = FakeQueue()
+                self.process = FakeProcess()
+
+            def Queue(self, maxsize: int):  # noqa: N802
+                return self.queue
+
+            def Process(  # noqa: N802
+                self, target: object, args: tuple[object, ...], name: str, daemon: bool
+            ):
+                return self.process
+
+        processor = OTelMetricsResultsProcessor(
+            service_id="records-manager",
+            service_config=service_config,
+            user_config=user_config_otel,
+        )
+        fake_context = FakeContext()
+        processor._initialize_in_process_meter_provider = AsyncMock()
+
+        with patch(
+            "aiperf.post_processors.otel_metrics_results_processor.mp.get_context",
+            return_value=fake_context,
+        ):
+            await processor._start_fanout_process()
+
+        processor._initialize_in_process_meter_provider.assert_awaited_once()
+        assert processor._use_fanout_process is False
+        assert fake_context.queue.closed is True
+        assert processor._fanout_queue is None
+        assert processor._fanout_process is None
+
+    @pytest.mark.asyncio
+    async def test_start_fanout_failure_disables_streaming_for_mlflow_only(
+        self,
+        fake_otel: dict[str, object],
+        service_config: ServiceConfig,
+        user_config_mlflow_only: UserConfig,
+    ) -> None:
+        class FakeContext:
+            def Queue(self, maxsize: int):  # noqa: N802
+                raise RuntimeError("queue creation failed")
+
+        processor = OTelMetricsResultsProcessor(
+            service_id="records-manager",
+            service_config=service_config,
+            user_config=user_config_mlflow_only,
+        )
+        processor._initialize_in_process_meter_provider = AsyncMock()
+
+        with patch(
+            "aiperf.post_processors.otel_metrics_results_processor.mp.get_context",
+            return_value=FakeContext(),
+        ):
+            await processor._start_fanout_process()
+
+        processor._initialize_in_process_meter_provider.assert_not_awaited()
+        assert processor._use_fanout_process is True
+        assert processor._streaming_ready is False
+        assert processor._fanout_queue is None
+        assert processor._fanout_process is None
+
+    @pytest.mark.asyncio
     async def test_process_result_fanout_emits_metric_and_timing_events(
         self,
         fake_otel: dict[str, object],

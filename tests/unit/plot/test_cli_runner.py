@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aiperf.common.config import MLflowDefaults
-from aiperf.plot.cli_runner import _resolve_mlflow_upload_target, run_plot_controller
+from aiperf.plot.cli_runner import (
+    _resolve_mlflow_upload_target,
+    _upload_generated_plots_to_mlflow,
+    run_plot_controller,
+)
 from aiperf.plot.constants import PlotMode, PlotTheme
 
 
@@ -431,3 +435,63 @@ class TestResolveMlflowUploadTarget:
                 tracking_uri=None,
                 run_id=None,
             )
+
+
+class TestUploadGeneratedPlotsToMlflow:
+    @patch("aiperf.plot.cli_runner.MLflowDataExporter.upload_artifacts_to_run")
+    def test_skips_upload_when_no_generated_files(
+        self,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        _upload_generated_plots_to_mlflow(
+            generated_files=[],
+            input_paths=[tmp_path / "run1"],
+            output_dir=tmp_path / "plots",
+            tracking_uri="http://mlflow:5000",
+            run_id="run-123",
+        )
+
+        mock_upload.assert_not_called()
+        captured = capsys.readouterr()
+        assert "No plots were generated; skipping MLflow plot upload." in captured.out
+
+    @patch("aiperf.plot.cli_runner.MLflowDataExporter.upload_artifacts_to_run")
+    @patch("aiperf.plot.cli_runner._resolve_mlflow_upload_target")
+    def test_uploads_and_prints_summary(
+        self,
+        mock_resolve_target: MagicMock,
+        mock_upload: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        output_dir = tmp_path / "plots"
+        generated_files = [
+            output_dir / "ttft_over_time.png",
+            output_dir / "ttft_p99.png",
+        ]
+        mock_resolve_target.return_value = ("http://mlflow:5000", "run-123")
+        mock_upload.return_value = ["ttft_over_time.png", "ttft_p99.png"]
+
+        _upload_generated_plots_to_mlflow(
+            generated_files=generated_files,
+            input_paths=[tmp_path / "run1"],
+            output_dir=output_dir,
+            tracking_uri=None,
+            run_id=None,
+        )
+
+        mock_resolve_target.assert_called_once_with(
+            input_paths=[tmp_path / "run1"],
+            tracking_uri=None,
+            run_id=None,
+        )
+        mock_upload.assert_called_once_with(
+            tracking_uri="http://mlflow:5000",
+            run_id="run-123",
+            artifact_directory=output_dir,
+            artifact_files=generated_files,
+        )
+        captured = capsys.readouterr()
+        assert "Uploaded 2 plot artifacts to MLflow run run-123." in captured.out
