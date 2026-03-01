@@ -29,7 +29,8 @@ class MLflowDataExporter(AIPerfLoggerMixin):
 
         if not self._user_config.mlflow_enabled:
             raise DataExporterDisabled(
-                "MLflow export is disabled (set --mlflow-tracking-uri to enable)."
+                "MLflow export is disabled "
+                "(set --mlflow --mlflow-tracking-uri to enable)."
             )
         if self._results is None:
             raise DataExporterDisabled(

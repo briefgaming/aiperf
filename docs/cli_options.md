@@ -714,6 +714,11 @@ Display HTTP trace timing metrics in the console at the end of the benchmark. Sh
 
 MLflow Tracking Server URI used for post-run uploads (e.g., http://localhost:5000). When set, AIPerf uploads params, metrics, tags, and artifacts (including plots) to MLflow after profiling completes.
 
+#### `--mlflow`
+
+Enable MLflow integration for live telemetry streaming and post-run uploads. Requires --mlflow-tracking-uri.
+<br>_Flag (no value required)_
+
 #### `--mlflow-experiment` `<str>`
 
 MLflow experiment name for post-run uploads. Ignored unless --mlflow-tracking-uri is set.

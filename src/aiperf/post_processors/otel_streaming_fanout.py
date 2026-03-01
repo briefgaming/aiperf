@@ -18,7 +18,7 @@ import orjson
 class OTelStreamingFanoutConfig:
     """Configuration for the dedicated OTel/MLflow streaming fanout process."""
 
-    endpoint_url: str
+    endpoint_url: str | None
     request_timeout_seconds: float
     export_interval_millis: int
     export_timeout_millis: int
@@ -58,27 +58,33 @@ def run_otel_streaming_fanout(
     config: OTelStreamingFanoutConfig,
 ) -> None:
     """Run OTel + MLflow live streaming fanout in a dedicated process."""
-    from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
-        OTLPMetricExporter,
-    )
-    from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-    from opentelemetry.sdk.resources import Resource
-
     logger = logging.getLogger(__name__)
+    meter_provider: Any | None = None
+    meter: Any | None = None
 
-    resource = Resource.create(config.resource_attributes)
-    exporter = OTLPMetricExporter(
-        endpoint=config.endpoint_url,
-        timeout=config.request_timeout_seconds,
-    )
-    reader = PeriodicExportingMetricReader(
-        exporter,
-        export_interval_millis=config.export_interval_millis,
-        export_timeout_millis=config.export_timeout_millis,
-    )
-    meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
-    meter = meter_provider.get_meter("aiperf.records")
+    if config.endpoint_url:
+        try:
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+                OTLPMetricExporter,
+            )
+            from opentelemetry.sdk.metrics import MeterProvider
+            from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+            from opentelemetry.sdk.resources import Resource
+
+            resource = Resource.create(config.resource_attributes)
+            exporter = OTLPMetricExporter(
+                endpoint=config.endpoint_url,
+                timeout=config.request_timeout_seconds,
+            )
+            reader = PeriodicExportingMetricReader(
+                exporter,
+                export_interval_millis=config.export_interval_millis,
+                export_timeout_millis=config.export_timeout_millis,
+            )
+            meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
+            meter = meter_provider.get_meter("aiperf.records")
+        except Exception as exc:
+            logger.warning(f"OTel sink disabled in fanout process: {exc!r}")
 
     histograms: dict[str, Any] = {}
     counters: dict[str, Any] = {}
@@ -170,15 +176,16 @@ def run_otel_streaming_fanout(
             if event_type == "histogram_record":
                 try:
                     metric_name = payload["metric_name"]
-                    if metric_name not in histograms:
+                    if meter is not None and metric_name not in histograms:
                         histograms[metric_name] = meter.create_histogram(
                             name=metric_name,
                             unit=payload["unit"],
                             description=payload["description"],
                         )
-                    histograms[metric_name].record(
-                        payload["value"], payload["attributes"]
-                    )
+                    if meter is not None:
+                        histograms[metric_name].record(
+                            payload["value"], payload["attributes"]
+                        )
                     _append_mlflow_metric(metric_name, payload["value"])
                 except Exception as exc:
                     logger.warning(
@@ -189,13 +196,16 @@ def run_otel_streaming_fanout(
             if event_type == "counter_add":
                 try:
                     metric_name = payload["metric_name"]
-                    if metric_name not in counters:
+                    if meter is not None and metric_name not in counters:
                         counters[metric_name] = meter.create_counter(
                             name=metric_name,
                             unit=payload["unit"],
                             description=payload["description"],
                         )
-                    counters[metric_name].add(payload["value"], payload["attributes"])
+                    if meter is not None:
+                        counters[metric_name].add(
+                            payload["value"], payload["attributes"]
+                        )
                     _append_mlflow_metric(metric_name, payload["value"])
                 except Exception as exc:
                     logger.warning(f"Invalid counter fanout payload received: {exc!r}")
@@ -204,15 +214,16 @@ def run_otel_streaming_fanout(
             if event_type == "up_down_counter_add":
                 try:
                     metric_name = payload["metric_name"]
-                    if metric_name not in up_down_counters:
+                    if meter is not None and metric_name not in up_down_counters:
                         up_down_counters[metric_name] = meter.create_up_down_counter(
                             name=metric_name,
                             unit=payload["unit"],
                             description=payload["description"],
                         )
-                    up_down_counters[metric_name].add(
-                        payload["value"], payload["attributes"]
-                    )
+                    if meter is not None:
+                        up_down_counters[metric_name].add(
+                            payload["value"], payload["attributes"]
+                        )
                     _append_mlflow_metric(metric_name, payload["value"])
                 except Exception as exc:
                     logger.warning(
@@ -221,16 +232,23 @@ def run_otel_streaming_fanout(
                 continue
 
             if event_type == "flush":
-                meter_provider.force_flush(timeout_millis=config.export_timeout_millis)
+                if meter_provider is not None:
+                    meter_provider.force_flush(
+                        timeout_millis=config.export_timeout_millis
+                    )
                 _flush_mlflow_metrics()
                 continue
 
             if event_type == "shutdown":
-                meter_provider.force_flush(timeout_millis=config.export_timeout_millis)
+                if meter_provider is not None:
+                    meter_provider.force_flush(
+                        timeout_millis=config.export_timeout_millis
+                    )
                 _flush_mlflow_metrics()
                 break
     finally:
-        meter_provider.shutdown()
+        if meter_provider is not None:
+            meter_provider.shutdown()
         if mlflow_state is not None:
             try:
                 mlflow_state["module"].end_run()

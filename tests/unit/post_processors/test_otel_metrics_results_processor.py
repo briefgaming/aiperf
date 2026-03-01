@@ -233,6 +233,23 @@ def user_config_otel_mlflow(tmp_artifact_dir) -> UserConfig:
             artifact_directory=tmp_artifact_dir,
         ),
         otel_url="collector:4318",
+        mlflow=True,
+        mlflow_tracking_uri="http://mlflow:5000",
+        mlflow_experiment="aiperf-tests",
+    )
+
+
+@pytest.fixture
+def user_config_mlflow_only(tmp_artifact_dir) -> UserConfig:
+    return UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+        ),
+        output=OutputConfig(
+            artifact_directory=tmp_artifact_dir,
+        ),
+        mlflow=True,
         mlflow_tracking_uri="http://mlflow:5000",
         mlflow_experiment="aiperf-tests",
     )
@@ -249,7 +266,9 @@ def _import_side_effect_for_otel(name: str, *args, **kwargs):
 
 
 class TestOTelMetricsResultsProcessor:
-    def test_disabled_without_otel_url(self, service_config: ServiceConfig) -> None:
+    def test_disabled_without_otel_or_mlflow(
+        self, service_config: ServiceConfig
+    ) -> None:
         user_config = UserConfig(
             endpoint=EndpointConfig(
                 model_names=["test-model"],
@@ -262,6 +281,33 @@ class TestOTelMetricsResultsProcessor:
                 service_config=service_config,
                 user_config=user_config,
             )
+
+    def test_enabled_with_mlflow_without_otel_url(
+        self,
+        service_config: ServiceConfig,
+        user_config_mlflow_only: UserConfig,
+    ) -> None:
+        processor = OTelMetricsResultsProcessor(
+            service_id="records-manager",
+            service_config=service_config,
+            user_config=user_config_mlflow_only,
+        )
+        assert processor._otel_metrics_url is None
+        assert processor._mlflow_live_enabled is True
+        assert processor._use_fanout_process is True
+
+    def test_mlflow_only_does_not_require_otel_imports(
+        self,
+        service_config: ServiceConfig,
+        user_config_mlflow_only: UserConfig,
+    ) -> None:
+        with patch("builtins.__import__", side_effect=_import_side_effect_for_otel):
+            processor = OTelMetricsResultsProcessor(
+                service_id="records-manager",
+                service_config=service_config,
+                user_config=user_config_mlflow_only,
+            )
+        assert processor._mlflow_live_enabled is True
 
     def test_init_dependency_failure_raises_post_processor_disabled(
         self,
@@ -290,6 +336,7 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config_otel,
         )
+        processor._use_fanout_process = False
         with (
             patch("builtins.__import__", side_effect=_import_side_effect_for_otel),
             pytest.raises(PostProcessorDisabled),
@@ -308,6 +355,7 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config_otel,
         )
+        processor._use_fanout_process = False
         await processor._initialize_meter_provider()
 
         metric_record = create_metric_records_message(
@@ -366,6 +414,7 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config,
         )
+        processor._use_fanout_process = False
         await processor._initialize_meter_provider()
 
         metric_record = create_metric_records_message(
@@ -400,6 +449,7 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config,
         )
+        processor._use_fanout_process = False
         await processor._initialize_meter_provider()
 
         timing_stats = CreditPhaseStats(
@@ -434,6 +484,7 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config_otel,
         )
+        processor._use_fanout_process = False
         await processor._initialize_meter_provider()
 
         timing_stats = CreditPhaseStats(
@@ -488,6 +539,7 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config_otel,
         )
+        processor._use_fanout_process = False
         await processor._initialize_meter_provider()
 
         first_stats = CreditPhaseStats(
@@ -556,6 +608,7 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config_otel,
         )
+        processor._use_fanout_process = False
         await processor._initialize_meter_provider()
 
         provider_cls = fake_otel["MeterProvider"]
@@ -564,16 +617,34 @@ class TestOTelMetricsResultsProcessor:
         assert len(provider.force_flush_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_initialize_uses_fanout_when_mlflow_is_enabled(
+    async def test_initialize_uses_fanout_by_default(
         self,
         fake_otel: dict[str, object],
         service_config: ServiceConfig,
-        user_config_otel_mlflow: UserConfig,
+        user_config_otel: UserConfig,
     ) -> None:
         processor = OTelMetricsResultsProcessor(
             service_id="records-manager",
             service_config=service_config,
-            user_config=user_config_otel_mlflow,
+            user_config=user_config_otel,
+        )
+        processor._start_fanout_process = AsyncMock()
+
+        await processor._initialize_meter_provider()
+
+        processor._start_fanout_process.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_initialize_uses_fanout_for_mlflow_only(
+        self,
+        fake_otel: dict[str, object],
+        service_config: ServiceConfig,
+        user_config_mlflow_only: UserConfig,
+    ) -> None:
+        processor = OTelMetricsResultsProcessor(
+            service_id="records-manager",
+            service_config=service_config,
+            user_config=user_config_mlflow_only,
         )
         processor._start_fanout_process = AsyncMock()
 
@@ -700,6 +771,7 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config_otel,
         )
+        processor._use_fanout_process = False
         await processor._initialize_meter_provider()
         provider_cls = fake_otel["MeterProvider"]
         provider = provider_cls.instances[-1]

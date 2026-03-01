@@ -78,7 +78,7 @@ class _FanoutAddInstrument:
 
 
 class OTelMetricsResultsProcessor(BaseMetricsProcessor):
-    """Streams per-record metrics to an OpenTelemetry collector."""
+    """Streams record and timing telemetry to configured live sinks."""
 
     def __init__(
         self,
@@ -89,24 +89,31 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         super().__init__(user_config=user_config, **kwargs)
         self.service_id = service_id or "records-manager"
         self._otel_metrics_url = user_config.otel_metrics_url
-        if not self._otel_metrics_url:
-            self.info("OTel metrics streaming is disabled (set --otel-url to enable)")
-            raise PostProcessorDisabled(
-                "OTel metrics streaming is disabled (set --otel-url to enable)"
-            )
-        try:
-            import opentelemetry.exporter.otlp.proto.http.metric_exporter  # noqa: F401
-            import opentelemetry.sdk.metrics  # noqa: F401
-        except ImportError as exc:
-            self.warning(
-                "OpenTelemetry metrics dependencies are not installed. "
-                "Install with: uv add opentelemetry-sdk "
-                "opentelemetry-exporter-otlp-proto-http. "
-                f"ImportError={exc!r}. python_executable={sys.executable}"
+        self._mlflow_live_enabled = user_config.mlflow_enabled
+
+        if not self._otel_metrics_url and not self._mlflow_live_enabled:
+            self.info(
+                "Telemetry streaming is disabled "
+                "(set --otel-url and/or --mlflow --mlflow-tracking-uri to enable)"
             )
             raise PostProcessorDisabled(
-                "OpenTelemetry metrics dependencies are not installed"
-            ) from exc
+                "Telemetry streaming is disabled "
+                "(set --otel-url and/or --mlflow --mlflow-tracking-uri to enable)"
+            )
+        if self._otel_metrics_url:
+            try:
+                import opentelemetry.exporter.otlp.proto.http.metric_exporter  # noqa: F401
+                import opentelemetry.sdk.metrics  # noqa: F401
+            except ImportError as exc:
+                self.warning(
+                    "OpenTelemetry metrics dependencies are not installed. "
+                    "Install with: uv add opentelemetry-sdk "
+                    "opentelemetry-exporter-otlp-proto-http. "
+                    f"ImportError={exc!r}. python_executable={sys.executable}"
+                )
+                raise PostProcessorDisabled(
+                    "OpenTelemetry metrics dependencies are not installed"
+                ) from exc
 
         self._meter_provider: Any | None = None
         self._meter: Any | None = None
@@ -139,8 +146,8 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
 
     @on_init
     async def _initialize_meter_provider(self) -> None:
-        """Initialize the OpenTelemetry meter provider."""
-        self.info("Initializing OpenTelemetry meter provider")
+        """Initialize telemetry streaming sinks."""
+        self.info("Initializing telemetry streaming sinks")
         if self._use_fanout_process:
             await self._start_fanout_process()
             return
@@ -149,6 +156,10 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
 
     async def _initialize_in_process_meter_provider(self) -> None:
         """Initialize in-process OTel SDK metric export."""
+        if not self._otel_metrics_url:
+            raise RuntimeError(
+                "In-process OTel meter provider requires --otel-url to be set."
+            )
         try:
             from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
                 OTLPMetricExporter,
@@ -193,7 +204,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
     async def _start_fanout_process(self) -> None:
         """Start a dedicated process that fans out streaming telemetry to OTel + MLflow."""
         config = OTelStreamingFanoutConfig(
-            endpoint_url=self._otel_metrics_url or "",
+            endpoint_url=self._otel_metrics_url,
             request_timeout_seconds=Environment.OTEL.REQUEST_TIMEOUT_SECONDS,
             export_interval_millis=self._to_millis(
                 Environment.OTEL.FLUSH_INTERVAL_SECONDS,
@@ -226,15 +237,22 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             )
             await asyncio.to_thread(process.start)
         except Exception as exc:
-            self.warning(
-                "Failed to start OTel fanout process. Falling back to in-process OTel "
-                f"streaming only. Error={exc!r}"
-            )
+            self.warning(f"Failed to start telemetry fanout process. Error={exc!r}")
             with suppress(Exception):
                 if "queue" in locals():
                     queue.close()
-            self._use_fanout_process = False
-            await self._initialize_in_process_meter_provider()
+            if self._otel_metrics_url:
+                self.warning(
+                    "Falling back to in-process OTel streaming because --otel-url "
+                    "is configured."
+                )
+                self._use_fanout_process = False
+                await self._initialize_in_process_meter_provider()
+            else:
+                self.warning(
+                    "Disabling live telemetry streaming for this run because fanout "
+                    "startup failed and no OTel fallback is configured."
+                )
             return
         finally:
             if was_daemon:
@@ -244,9 +262,9 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         self._fanout_process = process
         self._streaming_ready = True
         self.info(
-            "OTel metrics streaming enabled with process fanout "
-            f"(OTLP: {self._otel_metrics_url}, "
-            f"MLflow live: {bool(self.user_config.mlflow_tracking_uri)})"
+            "Telemetry streaming enabled with process fanout "
+            f"(OTLP: {bool(self._otel_metrics_url)}, "
+            f"MLflow live: {self._mlflow_live_enabled})"
         )
 
     async def process_result(self, record_data: OTelResultData) -> None:
@@ -425,8 +443,8 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             self.warning(f"Failed to enqueue OTel fanout event: {exc!r}")
 
     def _should_use_fanout_process(self) -> bool:
-        """Use cross-process fanout when MLflow live streaming is configured."""
-        return self.user_config.mlflow_enabled
+        """Fanout is the default streaming path for telemetry sinks."""
+        return True
 
     @staticmethod
     def _set_current_process_daemon(daemon: bool) -> None:

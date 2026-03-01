@@ -663,7 +663,7 @@ data_exporter:
     description: |
       MLflow post-run exporter that uploads benchmark params, metrics, tags,
       and generated artifacts (including plots) to an MLflow Tracking server.
-      Enabled when --mlflow-tracking-uri is configured.
+      Enabled when --mlflow and --mlflow-tracking-uri are configured.
 
   raw_record_aggregator:
     class: aiperf.post_processors.raw_record_writer_processor:RawRecordAggregator

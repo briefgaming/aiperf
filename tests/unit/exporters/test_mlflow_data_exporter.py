@@ -159,6 +159,7 @@ def mlflow_user_config(tmp_path: Path) -> UserConfig:
             urls=["http://localhost:8000"],
         ),
         output=OutputConfig(artifact_directory=tmp_path),
+        mlflow=True,
         mlflow_tracking_uri="http://mlflow:5000",
         mlflow_experiment="aiperf-tests",
         mlflow_run_name="nightly-run",
@@ -184,7 +185,7 @@ class TestMLflowDataExporter:
         )
         with pytest.raises(
             DataExporterDisabled,
-            match="set --mlflow-tracking-uri to enable",
+            match="set --mlflow --mlflow-tracking-uri to enable",
         ):
             MLflowDataExporter(config)
 
@@ -308,6 +309,7 @@ class TestMLflowDataExporter:
                 model_names=["test-model"],
             ),
             output=OutputConfig(artifact_directory=tmp_path),
+            mlflow=True,
             mlflow_tracking_uri="http://mlflow:5000",
             mlflow_experiment="aiperf-tests",
             mlflow_artifact_globs=["plots/**/*.png"],
