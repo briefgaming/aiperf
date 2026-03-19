@@ -23,6 +23,7 @@ from aiperf.common.models import (
     RequestRecord,
     TextResponse,
 )
+from aiperf.common.redact import redact_headers
 from aiperf.plugin import plugins
 from aiperf.plugin.enums import TransportType
 from aiperf.transports.aiohttp_client import AioHttpClient, create_tcp_connector
@@ -122,7 +123,9 @@ class AioHttpTransport(BaseTransport):
     async def _init_aiohttp_client(self) -> None:
         """Initialize the AioHttpClient and lease manager if sticky-user-sessions strategy is used."""
         self.aiohttp_client = AioHttpClient(
-            timeout=self.model_endpoint.endpoint.timeout, tcp_kwargs=self.tcp_kwargs
+            timeout=self.model_endpoint.endpoint.timeout,
+            tcp_kwargs=self.tcp_kwargs,
+            collect_trace_chunks=self.model_endpoint.endpoint.collect_trace_chunks,
         )
         if (
             self.model_endpoint.endpoint.connection_reuse_strategy
@@ -256,7 +259,7 @@ class AioHttpTransport(BaseTransport):
         try:
             url = self.build_url(request_info)
             headers = self.build_headers(request_info)
-            json_str = orjson.dumps(payload).decode("utf-8")
+            json_bytes = orjson.dumps(payload)
 
             match reuse_strategy:
                 case ConnectionReuseStrategy.NEVER:
@@ -295,14 +298,14 @@ class AioHttpTransport(BaseTransport):
 
             record = await self.aiohttp_client.post_request(
                 url,
-                json_str,
+                json_bytes,
                 headers,
                 cancel_after_ns=request_info.cancel_after_ns,
                 first_token_callback=first_token_callback,
                 connector=connector,
                 connector_owner=connector_owner,
             )
-            record.request_headers = headers
+            record.request_headers = redact_headers(headers)
 
             # Release lease for sticky-user-sessions strategy if it's the final turn of the conversation,
             # or the request was cancelled (connection is now dirty/closed), or there was an error.
@@ -329,7 +332,9 @@ class AioHttpTransport(BaseTransport):
             raise
         except Exception as e:
             record = RequestRecord(
-                request_headers=headers or request_info.endpoint_headers,
+                request_headers=redact_headers(
+                    headers or request_info.endpoint_headers
+                ),
                 start_perf_ns=start_perf_ns,
                 end_perf_ns=time.perf_counter_ns(),
                 error=ErrorDetails.from_exception(e),
@@ -396,7 +401,7 @@ class AioHttpTransport(BaseTransport):
         if self.aiohttp_client is None:
             raise NotInitializedError("AioHttpClient not initialized")
         record = await self.aiohttp_client.post_request(
-            url, orjson.dumps(payload).decode("utf-8"), headers
+            url, orjson.dumps(payload), headers
         )
         result = self._parse_video_response(record, "submit")
         if isinstance(result, ErrorDetails):

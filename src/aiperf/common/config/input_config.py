@@ -3,7 +3,13 @@
 
 from typing import Annotated, Any
 
-from pydantic import BeforeValidator, Field, model_validator
+from pydantic import (
+    BeforeValidator,
+    Field,
+    SerializationInfo,
+    field_serializer,
+    model_validator,
+)
 from typing_extensions import Self
 
 from aiperf.common import random_generator as rng
@@ -24,12 +30,13 @@ from aiperf.common.config.prompt_config import PromptConfig
 from aiperf.common.config.rankings_config import RankingsConfig
 from aiperf.common.config.synthesis_config import SynthesisConfig
 from aiperf.common.config.video_config import VideoConfig
-from aiperf.common.enums import PublicDatasetType
 from aiperf.common.exceptions import InvalidStateError, MetricTypeError
+from aiperf.common.redact import redact_header_tuples
 from aiperf.plugin import plugins
 from aiperf.plugin.enums import (
     CustomDatasetType,
     DatasetSamplingStrategy,
+    PublicDatasetType,
 )
 
 _logger = AIPerfLogger(__name__)
@@ -265,7 +272,7 @@ class InputConfig(BaseConfig):
         Field(
             description="Pre-configured public dataset to download and use for benchmarking (e.g., `sharegpt`). "
             "AIPerf automatically downloads and parses these datasets. Mutually exclusive with `--custom-dataset-type`. "
-            "See `PublicDatasetType` enum for available datasets.",
+            "Run `aiperf plugins public_dataset_loader` to list available datasets.",
         ),
         CLIParameter(
             name=("--public-dataset"),
@@ -278,7 +285,10 @@ class InputConfig(BaseConfig):
         Field(
             description="Format specification for custom dataset provided via `--input-file`. Determines parsing logic and expected file structure. "
             "Options: `single_turn` (JSONL with single exchanges), `multi_turn` (JSONL with conversation history), "
-            "`mooncake_trace`/`bailian_trace` (timestamped trace files), `random_pool` (directory of reusable prompts). "
+            "`mooncake_trace`/`bailian_trace` (timestamped trace files), `random_pool` (directory of reusable prompts; "
+            "when using `random_pool`, `--conversation-num` defaults to 100 if not specified; "
+            "batch sizes > 1 sample each modality independently from a flat pool and do not preserve "
+            "per-entry associations — use `single_turn` if paired modalities must stay together). "
             "Requires `--input-file`. Mutually exclusive with `--public-dataset`.",
         ),
         CLIParameter(
@@ -345,3 +355,13 @@ class InputConfig(BaseConfig):
     rankings: RankingsConfig = RankingsConfig()
     synthesis: SynthesisConfig = SynthesisConfig()
     conversation: ConversationConfig = ConversationConfig()
+
+    @field_serializer("headers")
+    @classmethod
+    def _redact_sensitive_headers(
+        cls, v: list[tuple[str, str]], info: SerializationInfo
+    ) -> list[tuple[str, str]]:
+        """Redact values of sensitive headers (Authorization, X-API-Key, etc.)."""
+        if info.context and info.context.get("include_secrets"):
+            return v
+        return redact_header_tuples(v)

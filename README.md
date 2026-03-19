@@ -17,16 +17,86 @@ AIPerf is a comprehensive benchmarking tool that measures the performance of gen
 
 ## Quick Start
 
-```bash
-pip install aiperf
+This quick start guide leverages [Ollama](https://ollama.com/) via
+ [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 
+### Setting up a Local Server
+
+In order to set up an Ollama server, run `granite4:350m` using the following commands:
+
+```bash
+docker run -d \
+  --name ollama \
+  -p 11434:11434 \
+  -v ollama-data:/root/.ollama \
+  ollama/ollama:latest
+docker exec -it ollama ollama pull granite4:350m
+```
+
+### Basic Usage
+
+Create a virtual environment and install AIPerf:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install aiperf
+```
+
+To run a simple benchmark against your Ollama server:
+
+```bash
 aiperf profile \
-  --model Qwen/Qwen3-0.6B \
-  --url http://localhost:8000 \
+  --model "granite4:350m" \
+  --streaming \
   --endpoint-type chat \
-  --concurrency 10 \
-  --request-count 100 \
-  --streaming
+  --tokenizer ibm-granite/granite-4.0-micro \
+  --url http://localhost:11434
+```
+
+
+### Example with Custom Configuration
+
+```bash
+aiperf profile \
+  --model "granite4:350m" \
+  --streaming \
+  --endpoint-type chat \
+  --tokenizer ibm-granite/granite-4.0-micro \
+  --url http://localhost:11434
+  --concurrency 5 \
+  --request-count 10
+```
+
+Example output:
+
+
+**NOTE:** The example performance is reflective of a CPU-only run and does not represent an official benchmark.
+
+```bash
+                                               NVIDIA AIPerf | LLM Metrics
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┓
+┃                               Metric ┃       avg ┃      min ┃       max ┃       p99 ┃       p90 ┃       p50 ┃      std ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━┩
+│             Time to First Token (ms) │  7,463.28 │ 7,125.81 │  9,484.24 │  9,295.48 │  7,596.62 │  7,240.23 │   677.23 │
+│            Time to Second Token (ms) │     68.73 │    32.01 │    102.86 │    102.55 │     99.80 │     67.37 │    24.95 │
+│      Time to First Output Token (ms) │  7,463.28 │ 7,125.81 │  9,484.24 │  9,295.48 │  7,596.62 │  7,240.23 │   677.23 │
+│                 Request Latency (ms) │ 13,829.40 │ 9,029.36 │ 27,905.46 │ 27,237.77 │ 21,228.48 │ 11,338.31 │ 5,614.32 │
+│             Inter Token Latency (ms) │     65.31 │    53.06 │     81.31 │     81.24 │     80.64 │     63.79 │     9.09 │
+│     Output Token Throughput Per User │     15.60 │    12.30 │     18.85 │     18.77 │     18.08 │     15.68 │     2.05 │
+│                    (tokens/sec/user) │           │          │           │           │           │           │          │
+│      Output Sequence Length (tokens) │     95.20 │    29.00 │    295.00 │    283.12 │    176.20 │     63.00 │    77.08 │
+│       Input Sequence Length (tokens) │    550.00 │   550.00 │    550.00 │    550.00 │    550.00 │    550.00 │     0.00 │
+│ Output Token Throughput (tokens/sec) │      6.85 │      N/A │       N/A │       N/A │       N/A │       N/A │      N/A │
+│    Request Throughput (requests/sec) │      0.07 │      N/A │       N/A │       N/A │       N/A │       N/A │      N/A │
+│             Request Count (requests) │     10.00 │      N/A │       N/A │       N/A │       N/A │       N/A │      N/A │
+└──────────────────────────────────────┴───────────┴──────────┴───────────┴───────────┴───────────┴───────────┴──────────┘
+
+CLI Command: aiperf profile --model 'granite4:350m' --streaming --endpoint-type 'chat' --tokenizer 'ibm-granite/granite-4.0-micro' --url 'http://localhost:11434'
+Benchmark Duration: 138.89 sec
+CSV Export: /home/user/aiperf/artifacts/granite4:350m-openai-chat-concurrency1/profile_export_aiperf.csv
+JSON Export: /home/user/Code/aiperf/artifacts/granite4:350m-openai-chat-concurrency1/profile_export_aiperf.json
+Log File: /home/user/Code/aiperf/artifacts/granite4:350m-openai-chat-concurrency1/logs/aiperf.log
 ```
 
 ## Features
@@ -63,9 +133,11 @@ aiperf profile \
 
 ### Workloads and Data
 - [Trace Benchmarking](docs/benchmark_modes/trace_replay.md) - Deterministic workload replay
+- [Bailian Traces](docs/tutorials/bailian-trace.md) - Bailian production trace replay
 - [Custom Prompt Benchmarking](docs/tutorials/custom-prompt-benchmarking.md) - Send exact prompts as-is
 - [Custom Dataset](docs/tutorials/custom-dataset.md) - Custom dataset formats
 - [ShareGPT Dataset](docs/tutorials/sharegpt.md) - Profile with ShareGPT dataset
+- [AIMO Dataset](docs/tutorials/aimo.md) - Profile with AIMO math reasoning dataset
 - [Synthetic Dataset Generation](docs/tutorials/synthetic-dataset.md) - Generate synthetic datasets
 - [Fixed Schedule](docs/tutorials/fixed-schedule.md) - Precise timestamp-based execution
 - [Time-based Benchmarking](docs/tutorials/time-based-benchmarking.md) - Duration-based testing
@@ -109,6 +181,7 @@ aiperf profile \
 | [Benchmark Modes](docs/benchmark_modes/trace_replay.md) | Trace replay and timing modes |
 | [Server Metrics](docs/server_metrics/server-metrics.md) | Prometheus-compatible server metrics collection |
 | [Tokenizer Auto-Detection](docs/reference/tokenizer-auto-detection.md) | Pre-flight tokenizer detection |
+| [Conversation Context Mode](docs/reference/conversation-context-mode.md) | How conversation history accumulates in multi-turn |
 | [Dataset Synthesis API](docs/api/synthesis.md) | Synthesis module API reference |
 | [Code Patterns](docs/dev/patterns.md) | Code examples for services, models, messages, plugins |
 | [Migrating from Genai-Perf](docs/migrating.md) | Migration guide and feature comparison |

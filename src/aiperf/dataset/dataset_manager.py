@@ -14,9 +14,9 @@ from aiperf.common.config import OutputDefaults, ServiceConfig, UserConfig
 from aiperf.common.enums import (
     CommAddress,
     CommandType,
+    ConversationContextMode,
     CreditPhase,
     MessageType,
-    PublicDatasetType,
 )
 from aiperf.common.environment import Environment
 from aiperf.common.hooks import on_command, on_request, on_stop
@@ -39,7 +39,6 @@ from aiperf.common.models import (
     SessionPayloads,
 )
 from aiperf.common.tokenizer import Tokenizer
-from aiperf.dataset.loader import ShareGPTLoader
 from aiperf.plugin import plugins
 from aiperf.plugin.enums import (
     ComposerType,
@@ -108,6 +107,7 @@ class DatasetManager(ReplyClientMixin, BaseComponentService):
             compress_only=self._compress_only,
         )
         self._dataset_client: DatasetClientStoreProtocol | None = None
+        self._default_context_mode: ConversationContextMode | None = None
 
     @on_command(CommandType.PROFILE_CONFIGURE)
     async def _profile_configure_command(
@@ -276,29 +276,21 @@ class DatasetManager(ReplyClientMixin, BaseComponentService):
                 temp_file_path.unlink()
 
     async def _load_public_dataset(self) -> list[Conversation]:
-        public_dataset_type = self.user_config.input.public_dataset
-        match public_dataset_type:
-            case PublicDatasetType.SHAREGPT:
-                loader = ShareGPTLoader(self.user_config, self.tokenizer)
-            case _:
-                raise ValueError(
-                    f"Unsupported public dataset type: {public_dataset_type}"
-                )
-
-        dataset = await loader.load_dataset()
-        # Only use loader's recommended strategy if user hasn't explicitly set one
-        if "dataset_sampling_strategy" not in self.user_config.input.model_fields_set:
-            self.user_config.input.dataset_sampling_strategy = (
-                loader.get_recommended_sampling_strategy()
-            )
-        return await loader.convert_to_conversations(dataset)
+        ComposerClass = plugins.get_class(
+            PluginType.DATASET_COMPOSER, ComposerType.PUBLIC
+        )
+        composer = ComposerClass(config=self.user_config, tokenizer=self.tokenizer)
+        self._default_context_mode = composer.get_default_context_mode()
+        return await composer.create_dataset_async()
 
     def _load_custom_dataset(self) -> list[Conversation]:
         ComposerClass = plugins.get_class(
             PluginType.DATASET_COMPOSER, ComposerType.CUSTOM
         )
         composer = ComposerClass(config=self.user_config, tokenizer=self.tokenizer)
-        return composer.create_dataset()
+        conversations = composer.create_dataset()
+        self._default_context_mode = composer.get_default_context_mode()
+        return conversations
 
     def _is_rankings_endpoint(self, endpoint_type: str) -> bool:
         return "rankings" in endpoint_type.lower()
@@ -313,7 +305,9 @@ class DatasetManager(ReplyClientMixin, BaseComponentService):
 
         ComposerClass = plugins.get_class(PluginType.DATASET_COMPOSER, composer_type)
         composer = ComposerClass(config=self.user_config, tokenizer=self.tokenizer)
-        return composer.create_dataset()
+        conversations = composer.create_dataset()
+        self._default_context_mode = composer.get_default_context_mode()
+        return conversations
 
     async def _configure_dataset(self) -> None:
         if self.user_config is None:
@@ -321,6 +315,7 @@ class DatasetManager(ReplyClientMixin, BaseComponentService):
 
         self.dataset_configured.clear()
 
+        self._default_context_mode = None
         if self.user_config.input.public_dataset is not None:
             conversations = await self._load_public_dataset()
         elif (
@@ -364,6 +359,7 @@ class DatasetManager(ReplyClientMixin, BaseComponentService):
         self.dataset_metadata = DatasetMetadata(
             conversations=[conversation.metadata() for conversation in conversations],
             sampling_strategy=self.user_config.input.dataset_sampling_strategy,
+            default_context_mode=self._default_context_mode,
         )
         self.info(
             f"sampling strategy: {self.dataset_metadata.sampling_strategy}, "

@@ -347,6 +347,31 @@ class CustomDatasetLoaderMetadata(BaseModel):
     )
 
 
+class PublicDatasetLoaderMetadata(BaseModel):
+    """Metadata schema for public dataset loader plugins.
+
+    Referenced by: categories.yaml public_dataset_loader.metadata_class
+    Used in: plugins.yaml public_dataset_loader entries
+    """
+
+    hf_dataset_name: str | None = Field(
+        default=None,
+        description="HuggingFace dataset identifier (e.g. 'AI-MO/NuminaMath-TIR'). Required for HF-backed loaders.",
+    )
+    hf_split: str = Field(
+        default="train",
+        description="HuggingFace dataset split to load (e.g. 'train', 'test', 'validation').",
+    )
+    hf_subset: str | None = Field(
+        default=None,
+        description="HuggingFace dataset subset/config name. Only needed for datasets with multiple configs.",
+    )
+    prompt_column: str | None = Field(
+        default=None,
+        description="Column name containing the prompt/instruction text. Required for HFInstructionResponseDatasetLoader.",
+    )
+
+
 class ServiceMetadata(BaseModel):
     """Metadata schema for service plugins.
 

@@ -27,17 +27,18 @@ dependencies = [
   "cyclopts>=4,<5",
   "fastapi>=0.115,<1",
   "ffmpeg-python~=0.2.0",
+  "datasets>=3.0",
   "huggingface-hub>=0.34.0,<2.0",
-  "jinja2~=3.1.5",  # NOTE: Versions prior to 3.1.5 have vuln exploits
+  "jinja2~=3.1.5", # NOTE: Versions prior to 3.1.5 have vuln exploits
   "jmespath~=1.0.1",
   "kaleido~=1.2.0",
   "matplotlib>=3.10.0",
   "msgspec>=0.19.0,<1.0.0",
   "numpy>=1.26.4,<3",
-  "nvidia-ml-py",  # Note: No version specified to be most compatible with CUDA version
-  "orjson~=3.10.18",
   "opentelemetry-exporter-otlp-proto-http>=1.24.0,<2.0.0",
   "opentelemetry-sdk>=1.24.0,<2.0.0",
+  "nvidia-ml-py", # Note: No version specified to be most compatible with CUDA version
+  "orjson~=3.11.7",
   "pandas~=2.3.3",
   "pillow~=12.1.1",
   "plotly~=6.4.0",
@@ -126,6 +127,7 @@ markers = [
     "component_integration: marks tests as component integration tests",
     "statistical: marks tests requiring statistical validation with large samples, and may not be stable by default",
     "server_unit: marks tests as unit tests for the mock server",
+    "fern: marks tests that validate Fern documentation (requires fern CLI)",
 ]
 # Better console output
 console_output_style = "progress"
@@ -134,7 +136,7 @@ verbosity_assertions = 2
 # Deselect performance, ffmpeg, and stress, and statistical, and component_integration, and integration, and server_unit tests by default
 # To run them: pytest -m performance, pytest -m ffmpeg, pytest -m stress, pytest -m statistical
 # IDE note: When running a specific test file/function from IDE, markers are often bypassed
-addopts = "--strict-markers -m 'not performance and not ffmpeg and not stress and not statistical and not component_integration and not integration and not server_unit'"
+addopts = "--strict-markers -m 'not performance and not ffmpeg and not stress and not statistical and not component_integration and not integration and not server_unit and not fern'"
 # Filter out known warnings from third-party libraries and test infrastructure
 filterwarnings = [
     "ignore::RuntimeWarning:looptime",
