@@ -80,7 +80,7 @@ class ExporterManager(AIPerfLoggerMixin):
                 continue
 
             # Upload to MLflow after all local exporters finish so all artifact files exist.
-            if str(exporter_entry.name) == "mlflow":
+            if str(exporter_entry.name) == DataExporterType.MLFLOW:
                 deferred_exporters.append(exporter)
                 continue
 

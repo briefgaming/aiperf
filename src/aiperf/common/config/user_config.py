@@ -519,7 +519,8 @@ class UserConfig(BaseConfig):
             default=False,
             description=(
                 "Enable MLflow integration for live telemetry streaming and post-run "
-                "uploads. Requires --mlflow-tracking-uri."
+                "uploads. Requires --mlflow-tracking-uri and the AIPerf mlflow "
+                "extra (`aiperf[mlflow]`)."
             ),
         ),
         CLIParameter(
@@ -559,7 +560,7 @@ class UserConfig(BaseConfig):
     ] = MLflowDefaults.RUN_NAME
 
     mlflow_tags: Annotated[
-        Any,
+        list[tuple[str, str]] | None,
         Field(
             default=MLflowDefaults.TAGS,
             description=(
@@ -632,6 +633,7 @@ class UserConfig(BaseConfig):
             default=None,
             description=(
                 "Enable real-time metric streaming to an OpenTelemetry collector via OTLP. "
+                "Requires the AIPerf otel extra (`aiperf[otel]`). "
                 "Accepts one collector URL. "
                 "The value can be a collector base URL or full OTLP metrics endpoint. "
                 "If no path is specified, '/v1/metrics' is appended automatically. "
@@ -870,8 +872,8 @@ class UserConfig(BaseConfig):
         return self._otel_metrics_url
 
     @property
-    def otel_streaming_enabled(self) -> bool:
-        """Check if OTel streaming is enabled."""
+    def otel_collector_enabled(self) -> bool:
+        """Check if an OpenTelemetry collector sink is configured."""
         return bool(self._otel_metrics_url)
 
     @property

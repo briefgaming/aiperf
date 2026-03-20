@@ -24,13 +24,13 @@ class MetricResultsStrategy(OTelResultsStrategyProtocol):
         if not isinstance(record_data, MetricRecordsData):
             return
 
-        attributes = self._context._build_record_attributes(record_data)
+        attributes = self._context.build_record_attributes(record_data)
         for metric_name, metric_value in record_data.metrics.items():
-            numeric_values = self._context._coerce_metric_values(
+            numeric_values = self._context.coerce_metric_values(
                 metric_name, metric_value
             )
             if not numeric_values:
                 continue
-            instrument = await self._context._get_or_create_histogram(metric_name)
+            instrument = await self._context.get_or_create_histogram(metric_name)
             for value in numeric_values:
                 instrument.record(value, attributes)

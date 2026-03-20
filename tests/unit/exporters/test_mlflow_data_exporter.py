@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 import builtins
-import json
 import sys
 import types
 from pathlib import Path
 from typing import Any
 
+import orjson
 import pytest
 
 from aiperf.common.config import EndpointConfig, OutputConfig, ServiceConfig, UserConfig
@@ -276,7 +276,7 @@ class TestMLflowDataExporter:
             == 1
         )
 
-        metadata = json.loads(
+        metadata = orjson.loads(
             (tmp_path / "mlflow_export.json").read_text(encoding="utf-8")
         )
         assert metadata["run_id"] == "run-123"
@@ -349,9 +349,7 @@ class TestMLflowDataExporter:
             "benchmark_id": benchmark_id,
             "live_streaming": True,
         }
-        (tmp_path / "mlflow_export.json").write_text(
-            json.dumps(metadata), encoding="utf-8"
-        )
+        (tmp_path / "mlflow_export.json").write_bytes(orjson.dumps(metadata))
 
         state = _install_fake_mlflow_modules(monkeypatch)
         config = ExporterConfig(
@@ -367,7 +365,7 @@ class TestMLflowDataExporter:
         assert state["run_names"] == [None]
         assert state["log_batch_calls"][0]["run_id"] == live_run_id
 
-        written_metadata = json.loads(
+        written_metadata = orjson.loads(
             (tmp_path / "mlflow_export.json").read_text(encoding="utf-8")
         )
         assert written_metadata["run_id"] == live_run_id
@@ -430,5 +428,5 @@ class TestMLflowDataExporter:
                 telemetry_results=None,
             )
         )
-        with pytest.raises(RuntimeError, match="mlflow package is not installed"):
+        with pytest.raises(RuntimeError, match="optional MLflow dependency"):
             await exporter.export()

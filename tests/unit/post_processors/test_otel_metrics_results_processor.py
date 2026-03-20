@@ -5,6 +5,7 @@ import builtins
 import sys
 import types
 from enum import Enum
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from aiperf.common.config import EndpointConfig, OutputConfig, ServiceConfig, Us
 from aiperf.common.enums import CreditPhase
 from aiperf.common.exceptions import PostProcessorDisabled
 from aiperf.common.models import CreditPhaseStats
+from aiperf.common.optional_dependencies import OTEL_METRICS_STREAMING_FEATURE
 from aiperf.plugin.enums import EndpointType
 from aiperf.post_processors.otel_metrics_results_processor import (
     OTelMetricsResultsProcessor,
@@ -258,7 +260,7 @@ def user_config_mlflow_only(tmp_artifact_dir) -> UserConfig:
 _ORIGINAL_IMPORT = builtins.__import__
 
 
-def _import_side_effect_for_otel(name: str, *args, **kwargs):
+def _import_side_effect_for_otel(name: str, *args: Any, **kwargs: Any) -> Any:
     """Raise ImportError for opentelemetry imports, delegate all others."""
     if name.startswith("opentelemetry"):
         raise ImportError("opentelemetry intentionally unavailable in test")
@@ -316,13 +318,14 @@ class TestOTelMetricsResultsProcessor:
     ) -> None:
         with (
             patch("builtins.__import__", side_effect=_import_side_effect_for_otel),
-            pytest.raises(PostProcessorDisabled),
+            pytest.raises(PostProcessorDisabled) as exc_info,
         ):
             OTelMetricsResultsProcessor(
                 service_id="records-manager",
                 service_config=service_config,
                 user_config=user_config_otel,
             )
+        assert OTEL_METRICS_STREAMING_FEATURE in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_initialize_otel_imports_failure_raises_post_processor_disabled(
@@ -339,9 +342,10 @@ class TestOTelMetricsResultsProcessor:
         processor._use_fanout_process = False
         with (
             patch("builtins.__import__", side_effect=_import_side_effect_for_otel),
-            pytest.raises(PostProcessorDisabled),
+            pytest.raises(PostProcessorDisabled) as exc_info,
         ):
             await processor._initialize_meter_provider()
+        assert OTEL_METRICS_STREAMING_FEATURE in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_process_result_records_histogram_values_by_metric(
@@ -880,7 +884,7 @@ class TestOTelMetricsResultsProcessor:
             results=[{"request_latency_ns": 123_000_000}]
         ).to_data()
 
-        attributes = processor._build_record_attributes(metric_record)
+        attributes = processor.build_record_attributes(metric_record)
         assert attributes["aiperf.worker.id"] == metric_record.metadata.worker_id
         assert (
             attributes["aiperf.record_processor.id"]
@@ -902,12 +906,12 @@ class TestOTelMetricsResultsProcessor:
             service_config=service_config,
             user_config=user_config_otel,
         )
-        assert processor._coerce_metric_values("test", 123) == [123.0]
-        assert processor._coerce_metric_values("test", 123.5) == [123.5]
-        assert processor._coerce_metric_values("test", [1, 2.5, "invalid", True]) == [
+        assert processor.coerce_metric_values("test", 123) == [123.0]
+        assert processor.coerce_metric_values("test", 123.5) == [123.5]
+        assert processor.coerce_metric_values("test", [1, 2.5, "invalid", True]) == [
             1.0,
             2.5,
         ]
-        assert processor._coerce_metric_values("test", True) == []
-        assert processor._coerce_metric_values("test", {"key": "value"}) == []
-        assert processor._coerce_metric_values("test", None) == []
+        assert processor.coerce_metric_values("test", True) == []
+        assert processor.coerce_metric_values("test", {"key": "value"}) == []
+        assert processor.coerce_metric_values("test", None) == []

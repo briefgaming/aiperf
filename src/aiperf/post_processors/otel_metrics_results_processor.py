@@ -19,6 +19,10 @@ from aiperf.common.exceptions import PostProcessorDisabled
 from aiperf.common.hooks import on_init, on_stop
 from aiperf.common.messages.inference_messages import MetricRecordsData
 from aiperf.common.models import CreditPhaseStats, MetricResult
+from aiperf.common.optional_dependencies import (
+    OTEL_METRICS_STREAMING_FEATURE,
+    otel_dependency_message,
+)
 from aiperf.post_processors.base_metrics_processor import BaseMetricsProcessor
 from aiperf.post_processors.otel_streaming_fanout import (
     OTelStreamingFanoutConfig,
@@ -105,15 +109,11 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
                 import opentelemetry.exporter.otlp.proto.http.metric_exporter  # noqa: F401
                 import opentelemetry.sdk.metrics  # noqa: F401
             except ImportError as exc:
+                message = otel_dependency_message(OTEL_METRICS_STREAMING_FEATURE)
                 self.warning(
-                    "OpenTelemetry metrics dependencies are not installed. "
-                    "Install with: uv add opentelemetry-sdk "
-                    "opentelemetry-exporter-otlp-proto-http. "
-                    f"ImportError={exc!r}. python_executable={sys.executable}"
+                    f"{message} ImportError={exc!r}. python_executable={sys.executable}"
                 )
-                raise PostProcessorDisabled(
-                    "OpenTelemetry metrics dependencies are not installed"
-                ) from exc
+                raise PostProcessorDisabled(message) from exc
 
         self._meter_provider: Any | None = None
         self._meter: Any | None = None
@@ -170,14 +170,11 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             )
             from opentelemetry.sdk.resources import Resource
         except ImportError as exc:
+            message = otel_dependency_message(OTEL_METRICS_STREAMING_FEATURE)
             self.warning(
-                "OpenTelemetry metrics dependencies are not installed. "
-                f"ImportError={exc!r}. python_executable={sys.executable}"
+                f"{message} ImportError={exc!r}. python_executable={sys.executable}"
             )
-            raise PostProcessorDisabled(
-                "OpenTelemetry metrics dependencies are not installed. Install with: "
-                "uv add opentelemetry-sdk opentelemetry-exporter-otlp-proto-http"
-            ) from exc
+            raise PostProcessorDisabled(message) from exc
 
         resource = Resource.create(self._build_resource_attributes())
         exporter = OTLPMetricExporter(
@@ -314,7 +311,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
                 self._meter = None
             self._streaming_ready = False
 
-    async def _get_or_create_histogram(self, metric_name: str) -> Any:
+    async def get_or_create_histogram(self, metric_name: str) -> Any:
         """Create or reuse a histogram instrument for a metric name."""
         if metric_name in self._histogram_instruments:
             return self._histogram_instruments[metric_name]
@@ -343,7 +340,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             self._histogram_instruments[metric_name] = instrument
             return instrument
 
-    async def _get_or_create_counter(
+    async def get_or_create_counter(
         self, metric_name: str, unit: str, description: str
     ) -> Any:
         """Create or reuse a counter instrument."""
@@ -372,7 +369,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             self._counter_instruments[metric_name] = instrument
             return instrument
 
-    async def _get_or_create_up_down_counter(
+    async def get_or_create_up_down_counter(
         self, metric_name: str, unit: str, description: str
     ) -> Any:
         """Create or reuse an up-down counter instrument."""
@@ -465,7 +462,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         attributes["aiperf.model.name"] = self.user_config.endpoint.model_names[0]
         return attributes
 
-    def _build_record_attributes(self, record: MetricRecordsData) -> dict[str, Any]:
+    def build_record_attributes(self, record: MetricRecordsData) -> dict[str, Any]:
         """Build OTLP metric attributes for an individual metric record."""
         metadata = record.metadata
         attributes: dict[str, Any] = {}
@@ -480,7 +477,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         attributes["aiperf.has_error"] = record.error is not None
         return attributes
 
-    def _build_timing_attributes(self, stats: CreditPhaseStats) -> dict[str, Any]:
+    def build_timing_attributes(self, stats: CreditPhaseStats) -> dict[str, Any]:
         """Build OTLP metric attributes for phase-level timing metrics."""
         attributes: dict[str, Any] = {}
         attributes["aiperf.benchmark_phase"] = str(stats.phase)
@@ -492,7 +489,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             attributes["aiperf.expected_num_sessions"] = stats.expected_num_sessions
         return attributes
 
-    def _calculate_timing_counter_delta(
+    def calculate_timing_counter_delta(
         self, *, metric_name: str, phase: CreditPhase, current_value: int
     ) -> int:
         """Calculate delta from cumulative timing counters."""
@@ -509,7 +506,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             return current_value
         return current_value - previous_value
 
-    def _calculate_timing_gauge_delta(
+    def calculate_timing_gauge_delta(
         self, *, metric_name: str, phase: CreditPhase, current_value: float
     ) -> float:
         """Calculate delta required to represent the latest gauge-like snapshot."""
@@ -520,7 +517,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             return current_value
         return current_value - previous_value
 
-    def _coerce_metric_values(self, metric_name: str, metric_value: Any) -> list[float]:
+    def coerce_metric_values(self, metric_name: str, metric_value: Any) -> list[float]:
         """Convert metric value to numeric values suitable for histograms."""
         if isinstance(metric_value, bool):
             return []
@@ -549,7 +546,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
             return "ns"
         return "1"
 
-    def _timing_unit(self, metric_name: str) -> str:
+    def timing_unit(self, metric_name: str) -> str:
         """Return a unit string for timing metrics."""
         if metric_name.endswith("_sec"):
             return "s"

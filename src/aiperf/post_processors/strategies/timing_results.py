@@ -43,12 +43,12 @@ class TimingResultsStrategy(OTelResultsStrategyProtocol):
         if not isinstance(record_data, CreditPhaseStats):
             return
 
-        attributes = self._context._build_timing_attributes(record_data)
+        attributes = self._context.build_timing_attributes(record_data)
 
         # Instrument counter fields
         for metric_name, field_name in self._COUNTER_FIELDS.items():
             current_value = int(getattr(record_data, field_name))
-            delta_value = self._context._calculate_timing_counter_delta(
+            delta_value = self._context.calculate_timing_counter_delta(
                 metric_name=metric_name,
                 phase=record_data.phase,
                 current_value=current_value,
@@ -56,7 +56,7 @@ class TimingResultsStrategy(OTelResultsStrategyProtocol):
             if delta_value <= 0:
                 continue
 
-            instrument = await self._context._get_or_create_counter(
+            instrument = await self._context.get_or_create_counter(
                 metric_name=metric_name,
                 unit="1",
                 description=f"AIPerf timing counter: {field_name}",
@@ -73,7 +73,7 @@ class TimingResultsStrategy(OTelResultsStrategyProtocol):
             else:
                 continue
 
-            delta_value = self._context._calculate_timing_gauge_delta(
+            delta_value = self._context.calculate_timing_gauge_delta(
                 metric_name=metric_name,
                 phase=record_data.phase,
                 current_value=current_value,
@@ -81,9 +81,9 @@ class TimingResultsStrategy(OTelResultsStrategyProtocol):
             if delta_value == 0:
                 continue
 
-            instrument = await self._context._get_or_create_up_down_counter(
+            instrument = await self._context.get_or_create_up_down_counter(
                 metric_name=metric_name,
-                unit=self._context._timing_unit(metric_name),
+                unit=self._context.timing_unit(metric_name),
                 description=f"AIPerf timing gauge metric: {field_name}",
             )
             instrument.add(delta_value, attributes)

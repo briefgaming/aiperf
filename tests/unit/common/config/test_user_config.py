@@ -490,7 +490,7 @@ class TestOTelStreamingConfig:
     def test_disabled_by_default(self):
         """OTel streaming is disabled when no collector URL is provided."""
         config = make_config()
-        assert config.otel_streaming_enabled is False
+        assert config.otel_collector_enabled is False
         assert config.otel_metrics_url is None
         assert config.otel_stream_metrics_enabled is True
         assert config.otel_stream_timing_enabled is True
@@ -510,7 +510,7 @@ class TestOTelStreamingConfig:
     def test_url_normalization(self, otel_url: str, expected_url: str):
         """Collector URL is normalized to an OTLP metrics endpoint."""
         config = make_config(otel_url=otel_url)
-        assert config.otel_streaming_enabled is True
+        assert config.otel_collector_enabled is True
         assert config.otel_metrics_url == expected_url
 
     @pytest.mark.parametrize("invalid_otel_url", ["", "   "])

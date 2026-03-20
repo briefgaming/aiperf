@@ -14,6 +14,7 @@ import orjson
 from aiperf.common.config import MLflowDefaults
 from aiperf.common.exceptions import DataExporterDisabled
 from aiperf.common.mixins import AIPerfLoggerMixin
+from aiperf.common.optional_dependencies import mlflow_dependency_message
 from aiperf.exporters.exporter_config import ExporterConfig, FileExportInfo
 
 
@@ -22,7 +23,7 @@ class MLflowDataExporter(AIPerfLoggerMixin):
 
     _PLOT_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".html"}
 
-    def __init__(self, exporter_config: ExporterConfig, **kwargs) -> None:
+    def __init__(self, exporter_config: ExporterConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._results = exporter_config.results
         self._user_config = exporter_config.user_config
@@ -63,8 +64,7 @@ class MLflowDataExporter(AIPerfLoggerMixin):
             import mlflow
         except ImportError as exc:
             raise RuntimeError(
-                "MLflow export enabled but mlflow package is not installed. "
-                "Install with: uv add mlflow"
+                mlflow_dependency_message("MLflow export is enabled")
             ) from exc
         return mlflow
 
@@ -153,8 +153,7 @@ class MLflowDataExporter(AIPerfLoggerMixin):
             from mlflow.tracking import MlflowClient
         except ImportError as exc:
             raise RuntimeError(
-                "MLflow export enabled but mlflow package is not installed. "
-                "Install with: uv add mlflow"
+                mlflow_dependency_message("MLflow export is enabled")
             ) from exc
 
         if self._tracking_uri is None:

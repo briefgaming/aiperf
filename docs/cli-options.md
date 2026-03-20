@@ -653,7 +653,7 @@ MLflow Tracking Server URI used for post-run uploads (e.g., http://localhost:500
 
 #### `--mlflow`
 
-Enable MLflow integration for live telemetry streaming and post-run uploads. Requires --mlflow-tracking-uri.
+Enable MLflow integration for live telemetry streaming and post-run uploads. Requires --mlflow-tracking-uri and the AIPerf mlflow extra (`aiperf[mlflow]`).
 <br/>_Flag (no value required)_
 
 #### `--mlflow-experiment` `<str>`
@@ -665,7 +665,7 @@ MLflow experiment name for post-run uploads. Ignored unless --mlflow-tracking-ur
 
 Optional MLflow run name for post-run uploads. If omitted, AIPerf derives a name from benchmark metadata.
 
-#### `--mlflow-tag` `<str>`
+#### `--mlflow-tag` `<list>`
 
 Additional MLflow run tags to attach on upload. Specify as key:value pairs (e.g., --mlflow-tag team:perf) or as JSON string.
 
@@ -929,7 +929,7 @@ Disable GPU telemetry collection entirely.
 
 #### `--otel-url` `<str>`
 
-Enable real-time metric streaming to an OpenTelemetry collector via OTLP. Accepts one collector URL. The value can be a collector base URL or full OTLP metrics endpoint. If no path is specified, '/v1/metrics' is appended automatically. Examples: --otel-url localhost:4318 | --otel-url http://collector:4318.
+Enable real-time metric streaming to an OpenTelemetry collector via OTLP. Requires the AIPerf otel extra (`aiperf[otel]`). Accepts one collector URL. The value can be a collector base URL or full OTLP metrics endpoint. If no path is specified, '/v1/metrics' is appended automatically. Examples: --otel-url localhost:4318 | --otel-url http://collector:4318.
 
 #### `--stream` `<list>`
 
@@ -1047,6 +1047,12 @@ aiperf plot --config my_plots.yaml
 
 # Show detailed error tracebacks
 aiperf plot --verbose
+
+# Generate plots and upload them to the MLflow run from mlflow_export.json
+aiperf plot --paths artifacts/my-run --mlflow-upload
+
+# Generate plots and upload to an explicit MLflow run
+aiperf plot --paths artifacts/my-run --mlflow-upload --mlflow-tracking-uri http://127.0.0.1:5000 --mlflow-run-id <run_id>
 ```
 
 #### `--paths`, `--empty-paths` `<list>`
@@ -1083,6 +1089,18 @@ Host for dashboard server (only used with --dashboard). Defaults to 127.0.0.1.
 
 Port for dashboard server (only used with --dashboard). Defaults to 8050.
 <br/>_Default: `8050`_
+
+#### `--mlflow-upload`, `--no-mlflow-upload`
+
+Upload generated PNG plot artifacts to an existing MLflow run.
+
+#### `--mlflow-tracking-uri` `<str>`
+
+Optional MLflow tracking URI override for plot upload.
+
+#### `--mlflow-run-id` `<str>`
+
+Optional MLflow run id override for plot upload.
 
 <hr/>
 

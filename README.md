@@ -43,6 +43,11 @@ source venv/bin/activate
 pip install aiperf
 ```
 
+Optional integrations:
+- `pip install "aiperf[mlflow]"` enables MLflow uploads and live telemetry streaming
+- `pip install "aiperf[otel]"` enables OpenTelemetry metric streaming
+- `pip install "aiperf[mlflow,otel]"` installs both extras
+
 To run a simple benchmark against your Ollama server:
 
 ```bash

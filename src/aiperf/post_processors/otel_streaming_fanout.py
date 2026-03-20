@@ -13,6 +13,11 @@ from typing import Any
 
 import orjson
 
+from aiperf.common.optional_dependencies import (
+    mlflow_dependency_message,
+    otel_dependency_message,
+)
+
 
 @dataclass(frozen=True)
 class OTelStreamingFanoutConfig:
@@ -83,6 +88,12 @@ def run_otel_streaming_fanout(
             )
             meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
             meter = meter_provider.get_meter("aiperf.records")
+        except ImportError as exc:
+            logger.warning(
+                "%s ImportError=%r",
+                otel_dependency_message("OTel sink is enabled in the fanout process"),
+                exc,
+            )
         except Exception as exc:
             logger.warning(f"OTel sink disabled in fanout process: {exc!r}")
 
@@ -121,6 +132,15 @@ def run_otel_streaming_fanout(
                 "step": 0,
                 "buffer": [],
             }
+        except ImportError as exc:
+            logger.warning(
+                "%s ImportError=%r",
+                mlflow_dependency_message(
+                    "MLflow live streaming is enabled in the fanout process"
+                ),
+                exc,
+            )
+            mlflow_state = None
         except Exception as exc:
             logger.warning(f"MLflow live streaming disabled in fanout process: {exc!r}")
             mlflow_state = None
