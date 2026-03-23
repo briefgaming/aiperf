@@ -78,7 +78,7 @@ class TimingResultsStrategy(OTelResultsStrategyProtocol):
                 phase=record_data.phase,
                 current_value=current_value,
             )
-            if delta_value == 0:
+            if abs(delta_value) < 1e-9:
                 continue
 
             instrument = await self._context.get_or_create_up_down_counter(

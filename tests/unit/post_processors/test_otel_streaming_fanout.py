@@ -16,6 +16,7 @@ from aiperf.post_processors.otel_streaming_fanout import (
     OTelStreamingFanoutConfig,
     run_otel_streaming_fanout,
 )
+from tests.unit.post_processors.conftest import install_fake_otel_modules
 
 
 class _SequenceQueue:
@@ -26,129 +27,6 @@ class _SequenceQueue:
         if not self._events:
             raise Empty
         return self._events.pop(0)
-
-
-def _install_fake_otel_modules(
-    monkeypatch: pytest.MonkeyPatch,
-    state: dict[str, Any],
-) -> None:
-    def _add_module(name: str, *, package: bool = True) -> types.ModuleType:
-        module = types.ModuleType(name)
-        if package:
-            module.__path__ = []
-        monkeypatch.setitem(sys.modules, name, module)
-        return module
-
-    opentelemetry = _add_module("opentelemetry")
-    exporter = _add_module("opentelemetry.exporter")
-    otlp = _add_module("opentelemetry.exporter.otlp")
-    proto = _add_module("opentelemetry.exporter.otlp.proto")
-    http = _add_module("opentelemetry.exporter.otlp.proto.http")
-    metric_exporter = _add_module(
-        "opentelemetry.exporter.otlp.proto.http.metric_exporter",
-        package=False,
-    )
-    sdk = _add_module("opentelemetry.sdk")
-    sdk_metrics = _add_module("opentelemetry.sdk.metrics")
-    sdk_metrics_export = _add_module("opentelemetry.sdk.metrics.export", package=False)
-    sdk_resources = _add_module("opentelemetry.sdk.resources", package=False)
-
-    opentelemetry.exporter = exporter
-    exporter.otlp = otlp
-    otlp.proto = proto
-    proto.http = http
-    http.metric_exporter = metric_exporter
-
-    opentelemetry.sdk = sdk
-    sdk.metrics = sdk_metrics
-    sdk.resources = sdk_resources
-    sdk_metrics.export = sdk_metrics_export
-
-    class FakeHistogram:
-        def __init__(self, name: str) -> None:
-            self.name = name
-            self.records: list[tuple[float, dict[str, Any]]] = []
-
-        def record(self, value: float, attributes: dict[str, Any]) -> None:
-            self.records.append((value, attributes))
-
-    class FakeCounter:
-        def __init__(self, name: str) -> None:
-            self.name = name
-            self.adds: list[tuple[float, dict[str, Any]]] = []
-
-        def add(self, value: float, attributes: dict[str, Any]) -> None:
-            self.adds.append((value, attributes))
-
-    class FakeMeter:
-        def __init__(self) -> None:
-            self.histograms: dict[str, FakeHistogram] = {}
-            self.counters: dict[str, FakeCounter] = {}
-            self.up_down_counters: dict[str, FakeCounter] = {}
-
-        def create_histogram(
-            self, name: str, unit: str, description: str
-        ) -> FakeHistogram:
-            histogram = FakeHistogram(name)
-            self.histograms[name] = histogram
-            return histogram
-
-        def create_counter(self, name: str, unit: str, description: str) -> FakeCounter:
-            counter = FakeCounter(name)
-            self.counters[name] = counter
-            return counter
-
-        def create_up_down_counter(
-            self, name: str, unit: str, description: str
-        ) -> FakeCounter:
-            up_down = FakeCounter(name)
-            self.up_down_counters[name] = up_down
-            return up_down
-
-    class FakeMeterProvider:
-        def __init__(self, resource: object, metric_readers: list[object]) -> None:
-            state["resource"] = resource
-            state["metric_readers"] = metric_readers
-            state["force_flush_calls"] = []
-            state["shutdown_calls"] = 0
-            state["meter"] = FakeMeter()
-
-        def get_meter(self, name: str) -> FakeMeter:
-            state["meter_name"] = name
-            return state["meter"]
-
-        def force_flush(self, timeout_millis: int = 30000) -> bool:
-            state["force_flush_calls"].append(timeout_millis)
-            return True
-
-        def shutdown(self) -> None:
-            state["shutdown_calls"] += 1
-
-    class FakeReader:
-        def __init__(
-            self,
-            exporter: object,
-            export_interval_millis: int,
-            export_timeout_millis: int,
-        ) -> None:
-            state["reader_export_interval_millis"] = export_interval_millis
-            state["reader_export_timeout_millis"] = export_timeout_millis
-            state["reader_exporter"] = exporter
-
-    class FakeResource:
-        @staticmethod
-        def create(attributes: dict[str, str]) -> dict[str, Any]:
-            return {"attributes": attributes}
-
-    class FakeExporter:
-        def __init__(self, endpoint: str, timeout: float) -> None:
-            state["exporter_endpoint"] = endpoint
-            state["exporter_timeout"] = timeout
-
-    metric_exporter.OTLPMetricExporter = FakeExporter
-    sdk_metrics.MeterProvider = FakeMeterProvider
-    sdk_metrics_export.PeriodicExportingMetricReader = FakeReader
-    sdk_resources.Resource = FakeResource
 
 
 def _install_fake_mlflow_modules(
@@ -240,7 +118,7 @@ def test_run_fanout_processes_events_for_otel_and_mlflow(
 ) -> None:
     otel_state: dict[str, Any] = {}
     mlflow_state: dict[str, Any] = {"log_batch_calls": []}
-    _install_fake_otel_modules(monkeypatch, otel_state)
+    install_fake_otel_modules(monkeypatch, otel_state)
     _install_fake_mlflow_modules(monkeypatch, mlflow_state)
 
     queue = _SequenceQueue(
@@ -330,7 +208,7 @@ def test_run_fanout_invalid_payload_logs_warning_and_continues(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     otel_state: dict[str, Any] = {}
-    _install_fake_otel_modules(monkeypatch, otel_state)
+    install_fake_otel_modules(monkeypatch, otel_state)
 
     queue = _SequenceQueue(
         [

@@ -903,11 +903,11 @@ class UserConfig(BaseConfig):
         return tags
 
     @property
-    def mlflow_resolved_artifact_globs(self) -> list[str]:
+    def mlflow_resolved_artifact_globs(self) -> tuple[str]:
         """Get explicit or default artifact glob patterns for MLflow upload."""
         if self.mlflow_artifact_globs:
             return self.mlflow_artifact_globs
-        return list(MLflowDefaults.DEFAULT_ARTIFACT_GLOBS)
+        return MLflowDefaults.DEFAULT_ARTIFACT_GLOBS
 
     server_metrics: Annotated[
         list[str] | None,

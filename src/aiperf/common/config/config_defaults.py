@@ -190,7 +190,7 @@ class MLflowDefaults:
     RUN_NAME = None
     TAGS = None
     ARTIFACT_GLOBS = None
-    DEFAULT_ARTIFACT_GLOBS = [
+    DEFAULT_ARTIFACT_GLOBS = (
         "*.json",
         "*.csv",
         "*.jsonl",
@@ -201,7 +201,7 @@ class MLflowDefaults:
         "**/*.jpeg",
         "**/*.svg",
         "**/*.html",
-    ]
+    )
     EXPORT_METADATA_FILE = Path("mlflow_export.json")
 
 
