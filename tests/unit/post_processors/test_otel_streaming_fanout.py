@@ -29,6 +29,25 @@ class _SequenceQueue:
         return self._events.pop(0)
 
 
+class _ObservedSequenceQueue(_SequenceQueue):
+    def __init__(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        before_get: dict[int, Any],
+    ) -> None:
+        super().__init__(events)
+        self._before_get = before_get
+        self._get_calls = 0
+
+    def get(self, timeout: float | None = None) -> dict[str, Any]:
+        callback = self._before_get.get(self._get_calls)
+        if callback is not None:
+            callback()
+        self._get_calls += 1
+        return super().get(timeout)
+
+
 def _install_fake_mlflow_modules(
     monkeypatch: pytest.MonkeyPatch,
     state: dict[str, Any],
@@ -95,13 +114,17 @@ def _install_fake_mlflow_modules(
 
 
 def _build_config(
-    tmp_path: Path, *, endpoint_url: str | None
+    tmp_path: Path,
+    *,
+    endpoint_url: str | None,
+    max_batch_records: int = 500,
 ) -> OTelStreamingFanoutConfig:
     return OTelStreamingFanoutConfig(
         endpoint_url=endpoint_url,
         request_timeout_seconds=5.0,
         export_interval_millis=100,
         export_timeout_millis=1000,
+        max_batch_records=max_batch_records,
         resource_attributes={"service.name": "aiperf"},
         mlflow_tracking_uri="http://mlflow:5000",
         mlflow_experiment="aiperf-tests",
@@ -202,6 +225,124 @@ def test_run_fanout_without_otel_sink_still_logs_mlflow(
     assert mlflow_state["end_run_called"] is True
 
 
+def test_run_fanout_logs_timing_gauge_snapshots_to_mlflow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    mlflow_state: dict[str, Any] = {"log_batch_calls": []}
+    _install_fake_mlflow_modules(monkeypatch, mlflow_state)
+
+    queue = _SequenceQueue(
+        [
+            {
+                "type": "up_down_counter_add",
+                "payload": {
+                    "metric_name": "aiperf.timing.requests.in_flight",
+                    "unit": "1",
+                    "description": "in-flight requests",
+                    "value": 2.0,
+                    "attributes": {"aiperf.benchmark_phase": "profiling"},
+                },
+            },
+            {
+                "type": "up_down_counter_add",
+                "payload": {
+                    "metric_name": "aiperf.timing.requests.in_flight",
+                    "unit": "1",
+                    "description": "in-flight requests",
+                    "value": -1.0,
+                    "attributes": {"aiperf.benchmark_phase": "profiling"},
+                },
+            },
+            {
+                "type": "up_down_counter_add",
+                "payload": {
+                    "metric_name": "aiperf.timing.requests.in_flight",
+                    "unit": "1",
+                    "description": "in-flight requests",
+                    "value": -1.0,
+                    "attributes": {"aiperf.benchmark_phase": "profiling"},
+                },
+            },
+            {"type": "shutdown", "payload": {}},
+        ]
+    )
+    config = _build_config(tmp_path, endpoint_url=None)
+
+    run_otel_streaming_fanout(queue, config)
+
+    assert len(mlflow_state["log_batch_calls"]) == 1
+    logged_metrics = mlflow_state["log_batch_calls"][0]["metrics"]
+    assert [metric.key for metric in logged_metrics] == [
+        "live.aiperf.timing.requests.in_flight",
+        "live.aiperf.timing.requests.in_flight",
+        "live.aiperf.timing.requests.in_flight",
+    ]
+    assert [metric.value for metric in logged_metrics] == [2.0, 1.0, 0.0]
+
+
+def test_run_fanout_flushes_mlflow_batches_when_max_batch_size_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    mlflow_state: dict[str, Any] = {"log_batch_calls": []}
+    _install_fake_mlflow_modules(monkeypatch, mlflow_state)
+
+    def assert_threshold_flush_happened() -> None:
+        assert len(mlflow_state["log_batch_calls"]) == 1
+        first_batch = mlflow_state["log_batch_calls"][0]["metrics"]
+        assert [metric.value for metric in first_batch] == [1.0, 2.0]
+
+    queue = _ObservedSequenceQueue(
+        [
+            {
+                "type": "counter_add",
+                "payload": {
+                    "metric_name": "aiperf.requests.completed",
+                    "unit": "1",
+                    "description": "completed",
+                    "value": 1.0,
+                    "attributes": {},
+                },
+            },
+            {
+                "type": "counter_add",
+                "payload": {
+                    "metric_name": "aiperf.requests.completed",
+                    "unit": "1",
+                    "description": "completed",
+                    "value": 2.0,
+                    "attributes": {},
+                },
+            },
+            {
+                "type": "counter_add",
+                "payload": {
+                    "metric_name": "aiperf.requests.completed",
+                    "unit": "1",
+                    "description": "completed",
+                    "value": 3.0,
+                    "attributes": {},
+                },
+            },
+            {"type": "shutdown", "payload": {}},
+        ],
+        before_get={2: assert_threshold_flush_happened},
+    )
+    config = _build_config(tmp_path, endpoint_url=None, max_batch_records=2)
+
+    run_otel_streaming_fanout(queue, config)
+
+    assert len(mlflow_state["log_batch_calls"]) == 2
+    first_batch = mlflow_state["log_batch_calls"][0]["metrics"]
+    second_batch = mlflow_state["log_batch_calls"][1]["metrics"]
+    assert [metric.value for metric in first_batch] == [1.0, 2.0]
+    assert [metric.value for metric in second_batch] == [3.0]
+    assert [metric.step for metric in first_batch] == [0, 1]
+    assert [metric.step for metric in second_batch] == [2]
+    assert mlflow_state["end_run_called"] is True
+
+
 def test_run_fanout_invalid_payload_logs_warning_and_continues(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -227,6 +368,7 @@ def test_run_fanout_invalid_payload_logs_warning_and_continues(
         request_timeout_seconds=5.0,
         export_interval_millis=100,
         export_timeout_millis=1000,
+        max_batch_records=500,
         resource_attributes={"service.name": "aiperf"},
         mlflow_tracking_uri=None,
         mlflow_experiment="aiperf-tests",

@@ -368,10 +368,6 @@ class TestRunPlotController:
         tmp_path: Path,
     ) -> None:
         """Test --mlflow-upload cannot be combined with --dashboard."""
-        mock_controller = MagicMock()
-        mock_controller.run.return_value = None
-        mock_controller_class.return_value = mock_controller
-
         with pytest.raises(ValueError, match="not supported in dashboard mode"):
             run_plot_controller(
                 paths=[str(tmp_path / "run1")],
@@ -379,6 +375,23 @@ class TestRunPlotController:
                 dashboard=True,
                 mlflow_upload=True,
             )
+        mock_controller_class.assert_not_called()
+
+    @patch("aiperf.plot.cli_runner.PlotController")
+    def test_mlflow_upload_rejected_for_explicit_dashboard_mode(
+        self,
+        mock_controller_class: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test --mlflow-upload is rejected when dashboard mode is selected directly."""
+        with pytest.raises(ValueError, match="not supported in dashboard mode"):
+            run_plot_controller(
+                paths=[str(tmp_path / "run1")],
+                output=str(tmp_path / "output"),
+                mode=PlotMode.DASHBOARD,
+                mlflow_upload=True,
+            )
+        mock_controller_class.assert_not_called()
 
 
 class TestResolveMlflowUploadTarget:

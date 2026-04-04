@@ -36,6 +36,7 @@ def _install_fake_mlflow_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, A
         "run_ids": [],
         "log_batch_calls": [],
         "artifacts": [],
+        "artifact_contents": {},
     }
     default_run_id = "run-123"
 
@@ -105,6 +106,9 @@ def _install_fake_mlflow_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, A
 
     def log_artifact(local_path: str, artifact_path: str | None = None) -> None:
         state["artifacts"].append((local_path, artifact_path))
+        state["artifact_contents"][local_path] = Path(local_path).read_text(
+            encoding="utf-8"
+        )
 
     mlflow_module.set_tracking_uri = set_tracking_uri  # type: ignore[attr-defined]
     mlflow_module.set_experiment = set_experiment  # type: ignore[attr-defined]
@@ -364,12 +368,21 @@ class TestMLflowDataExporter:
         assert state["run_ids"] == [live_run_id]
         assert state["run_names"] == [None]
         assert state["log_batch_calls"][0]["run_id"] == live_run_id
+        uploaded = [
+            (Path(local_path).relative_to(tmp_path).as_posix(), artifact_path)
+            for local_path, artifact_path in state["artifacts"]
+        ]
+        assert ("mlflow_export.json", "exports") in uploaded
 
         written_metadata = orjson.loads(
             (tmp_path / "mlflow_export.json").read_text(encoding="utf-8")
         )
         assert written_metadata["run_id"] == live_run_id
         assert written_metadata["reused_live_run"] is True
+        uploaded_metadata = orjson.loads(
+            state["artifact_contents"][str(tmp_path / "mlflow_export.json")]
+        )
+        assert uploaded_metadata == written_metadata
 
     def test_upload_artifacts_to_run_supports_plot_only_upload(
         self,

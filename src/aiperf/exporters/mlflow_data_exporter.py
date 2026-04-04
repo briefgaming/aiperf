@@ -112,20 +112,33 @@ class MLflowDataExporter(AIPerfLoggerMixin):
         log_artifact: Callable[[str, str | None], None],
     ) -> list[str]:
         """Log artifacts using provided callback and return uploaded names."""
-        uploaded_artifacts: list[str] = []
+        uploaded_artifacts = cls.uploaded_artifact_names(
+            artifact_directory=artifact_directory,
+            artifact_files=artifact_files,
+        )
         for artifact_file in artifact_files:
             artifact_path = cls.resolve_artifact_path(
                 artifact_directory=artifact_directory,
                 artifact_file=artifact_file,
             )
             log_artifact(str(artifact_file), artifact_path)
-            uploaded_artifacts.append(
-                cls._relative_artifact_name(
-                    artifact_directory=artifact_directory,
-                    artifact_file=artifact_file,
-                )
-            )
         return uploaded_artifacts
+
+    @classmethod
+    def uploaded_artifact_names(
+        cls,
+        *,
+        artifact_directory: Path,
+        artifact_files: list[Path],
+    ) -> list[str]:
+        """Return the relative artifact names that will be recorded in metadata."""
+        return [
+            cls._relative_artifact_name(
+                artifact_directory=artifact_directory,
+                artifact_file=artifact_file,
+            )
+            for artifact_file in artifact_files
+        ]
 
     @classmethod
     def upload_artifacts_to_run(
@@ -201,22 +214,26 @@ class MLflowDataExporter(AIPerfLoggerMixin):
                     tags=tags,
                 )
 
+            artifact_files = self._iter_artifact_files()
+            uploaded_artifacts = self.uploaded_artifact_names(
+                artifact_directory=self._artifact_directory,
+                artifact_files=artifact_files,
+            )
+            self._write_export_metadata(
+                run_id=run_id,
+                run_name=run_name,
+                metric_keys=sorted(metric_payload),
+                param_keys=sorted(param_payload),
+                tag_keys=sorted(tag_payload),
+                uploaded_artifacts=uploaded_artifacts,
+                reused_live_run=existing_live_run_id is not None,
+                live_streaming=bool(existing_metadata.get("live_streaming")),
+            )
             uploaded_artifacts = self.log_artifacts(
                 artifact_directory=self._artifact_directory,
-                artifact_files=self._iter_artifact_files(),
+                artifact_files=artifact_files,
                 log_artifact=mlflow.log_artifact,
             )
-
-        self._write_export_metadata(
-            run_id=run_id,
-            run_name=run_name,
-            metric_keys=sorted(metric_payload),
-            param_keys=sorted(param_payload),
-            tag_keys=sorted(tag_payload),
-            uploaded_artifacts=uploaded_artifacts,
-            reused_live_run=existing_live_run_id is not None,
-            live_streaming=bool(existing_metadata.get("live_streaming")),
-        )
         self.info(
             f"Uploaded MLflow run '{run_name}' ({run_id}) with "
             f"{len(metric_payload)} metrics and {len(uploaded_artifacts)} artifacts."

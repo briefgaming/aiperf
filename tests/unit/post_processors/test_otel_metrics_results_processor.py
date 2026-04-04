@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import builtins
+from queue import Full
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -601,6 +602,54 @@ class TestOTelMetricsResultsProcessor:
             event.get("payload", {}).get("metric_name") == "aiperf.request_latency_ns"
             for event in fake_queue.events
         )
+
+    def test_queue_fanout_event_drops_oldest_when_queue_is_full(
+        self,
+        service_config: ServiceConfig,
+        user_config_mlflow_only: UserConfig,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        class FakeQueue:
+            def __init__(self, events: list[dict[str, object]], maxsize: int) -> None:
+                self.events = list(events)
+                self.maxsize = maxsize
+
+            def put_nowait(self, event: dict[str, object]) -> None:
+                if len(self.events) >= self.maxsize:
+                    raise Full
+                self.events.append(event)
+
+            def get_nowait(self) -> dict[str, object]:
+                return self.events.pop(0)
+
+            def close(self) -> None:
+                return
+
+        oldest_event = {"type": "histogram_record", "payload": {"metric_name": "old"}}
+        newest_queued_event = {
+            "type": "histogram_record",
+            "payload": {"metric_name": "newer"},
+        }
+        processor = OTelMetricsResultsProcessor(
+            service_id="records-manager",
+            service_config=service_config,
+            user_config=user_config_mlflow_only,
+        )
+        processor._fanout_queue = FakeQueue(
+            events=[oldest_event, newest_queued_event],
+            maxsize=2,
+        )
+
+        with caplog.at_level("WARNING"):
+            processor._queue_fanout_event("flush", {})
+
+        assert processor._fanout_dropped_events == 1
+        assert processor._fanout_sent_events == 1
+        assert processor._fanout_queue.events == [
+            newest_queued_event,
+            {"type": "flush", "payload": {}},
+        ]
+        assert "dropping oldest event" in caplog.text
 
     @pytest.mark.asyncio
     async def test_flush_and_stop_emit_fanout_control_events(

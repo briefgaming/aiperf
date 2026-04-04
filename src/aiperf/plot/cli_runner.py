@@ -138,6 +138,12 @@ def run_plot_controller(
     if isinstance(theme, str):
         theme = PlotTheme(theme.lower())
 
+    if mode == PlotMode.DASHBOARD and mlflow_upload:
+        raise ValueError(
+            "--mlflow-upload is not supported in dashboard mode. "
+            "Run without --dashboard to export PNG plots."
+        )
+
     config_path = Path(config) if config else None
 
     controller = PlotController(
@@ -166,9 +172,4 @@ def run_plot_controller(
                 tracking_uri=mlflow_tracking_uri,
                 run_id=mlflow_run_id,
             )
-    elif mlflow_upload:
-        raise ValueError(
-            "--mlflow-upload is not supported in dashboard mode. "
-            "Run without --dashboard to export PNG plots."
-        )
     print(f"Logs: {output_dir / PLOT_LOG_FILE}")

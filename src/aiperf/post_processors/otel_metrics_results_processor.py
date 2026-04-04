@@ -9,7 +9,7 @@ import sys
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from queue import Full
+from queue import Empty, Full
 from typing import Any
 
 from aiperf.common.config import MLflowDefaults, UserConfig
@@ -141,7 +141,8 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
         self._fanout_queue: Any | None = None
         self._fanout_process: mp.Process | None = None
         self._fanout_dropped_events = 0
-        self._fanout_queue_maxsize = 10000
+        self._fanout_sent_events = 0
+        self._fanout_queue_maxsize = Environment.OTEL.MAX_BUFFERED_RECORDS
         self.info("Initialized OTelMetricsResultsProcessor")
 
     @on_init
@@ -208,6 +209,7 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
                 minimum=100,
             ),
             export_timeout_millis=self._export_timeout_millis,
+            max_batch_records=Environment.OTEL.MAX_BATCH_RECORDS,
             resource_attributes=self._build_resource_attributes(),
             mlflow_tracking_uri=self.user_config.mlflow_tracking_uri,
             mlflow_experiment=self.user_config.mlflow_experiment,
@@ -422,20 +424,48 @@ class OTelMetricsResultsProcessor(BaseMetricsProcessor):
                 f"{self._fanout_dropped_events}"
             )
 
+    def _record_fanout_drop(self, message: str) -> None:
+        self._fanout_dropped_events += 1
+        if self._fanout_dropped_events in {1, 100, 1000}:
+            self.warning(f"{message} (dropped={self._fanout_dropped_events}).")
+
+    def _drop_oldest_fanout_event(self) -> bool:
+        """Drop the oldest queued event to preserve fresher live telemetry."""
+        if self._fanout_queue is None:
+            return False
+
+        try:
+            self._fanout_queue.get_nowait()
+        except Empty:
+            return False
+        except Exception as exc:
+            self.warning(f"Failed to drop oldest OTel fanout event: {exc!r}")
+            return False
+
+        self._record_fanout_drop("OTel fanout queue is full; dropping oldest event")
+        return True
+
     def _queue_fanout_event(self, event_type: str, payload: dict[str, Any]) -> None:
         """Enqueue streaming event for the fanout process without blocking the event loop."""
         if self._fanout_queue is None:
             return
 
+        event = {"type": event_type, "payload": payload}
         try:
-            self._fanout_queue.put_nowait({"type": event_type, "payload": payload})
+            self._fanout_queue.put_nowait(event)
+            self._fanout_sent_events += 1
         except Full:
-            self._fanout_dropped_events += 1
-            if self._fanout_dropped_events in {1, 100, 1000}:
-                self.warning(
-                    "OTel fanout queue is full; dropping events "
-                    f"(dropped={self._fanout_dropped_events})."
-                )
+            if self._drop_oldest_fanout_event():
+                try:
+                    self._fanout_queue.put_nowait(event)
+                    self._fanout_sent_events += 1
+                    return
+                except Full:
+                    pass
+
+            self._record_fanout_drop(
+                "OTel fanout queue remained full; dropping newest event"
+            )
         except Exception as exc:
             self.warning(f"Failed to enqueue OTel fanout event: {exc!r}")
 
