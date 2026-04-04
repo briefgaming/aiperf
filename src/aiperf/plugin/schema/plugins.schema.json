@@ -717,6 +717,19 @@
               "description": "Whether to load the HuggingFace dataset in streaming mode. Use true for large datasets (>10 GB) to avoid downloading the full dataset. Use false (default) for small datasets to leverage HF caching and len() support.",
               "title": "Streaming",
               "type": "boolean"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Filter dataset rows to a specific category value. Used by loaders that support per-category subsets (e.g. SPEED-Bench).",
+              "title": "Category"
             }
           },
           "title": "PublicDatasetLoaderMetadata",
@@ -850,6 +863,12 @@
               "default": false,
               "description": "Whether endpoint uses async job polling (submit job, poll for status, retrieve result).",
               "title": "Requires Polling",
+              "type": "boolean"
+            },
+            "requires_inline_media": {
+              "default": false,
+              "description": "Whether endpoint requires media URLs to be downloaded and inlined as base64 data URLs.",
+              "title": "Requires Inline Media",
               "type": "boolean"
             }
           },
