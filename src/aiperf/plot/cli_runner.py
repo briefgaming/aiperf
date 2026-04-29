@@ -94,6 +94,7 @@ def _upload_generated_plots_to_mlflow(
 def run_plot_controller(
     paths: list[str] | None = None,
     output: str | None = None,
+    *,
     mode: PlotMode | str = PlotMode.PNG,
     theme: PlotTheme | str = PlotTheme.LIGHT,
     config: str | None = None,
